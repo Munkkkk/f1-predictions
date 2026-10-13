@@ -1,0 +1,9 @@
+{"MRData": {"limit": "2", "offset": "2", "total": "3", "RaceTable": {"season": "2026", "Races": [
+  {"season": "2026", "round": "1", "raceName": "Australian Grand Prix", "date": "2026-03-08",
+   "Circuit": {"circuitId": "albert_park"},
+   "Results": [
+     {"position": "3", "positionText": "3", "points": "15",
+      "Driver": {"driverId": "hamilton", "givenName": "Lewis", "familyName": "Hamilton"},
+      "Constructor": {"constructorId": "ferrari"}, "status": "+1 Lap"}
+   ]}
+]}}}

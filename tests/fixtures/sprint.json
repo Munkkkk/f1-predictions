@@ -1,0 +1,9 @@
+{"MRData": {"limit": "100", "offset": "0", "total": "1", "RaceTable": {"season": "2026", "Races": [
+  {"season": "2026", "round": "2", "raceName": "Chinese Grand Prix", "date": "2026-03-15",
+   "Circuit": {"circuitId": "shanghai"},
+   "SprintResults": [
+     {"position": "1", "positionText": "1", "points": "8",
+      "Driver": {"driverId": "antonelli", "givenName": "Andrea Kimi", "familyName": "Antonelli"},
+      "Constructor": {"constructorId": "mercedes"}, "status": "Finished"}
+   ]}
+]}}}

@@ -1,0 +1,12 @@
+{"MRData": {"limit": "2", "offset": "0", "total": "3", "RaceTable": {"season": "2026", "Races": [
+  {"season": "2026", "round": "1", "raceName": "Australian Grand Prix", "date": "2026-03-08",
+   "Circuit": {"circuitId": "albert_park"},
+   "Results": [
+     {"position": "1", "positionText": "1", "points": "25",
+      "Driver": {"driverId": "russell", "givenName": "George", "familyName": "Russell"},
+      "Constructor": {"constructorId": "mercedes"}, "status": "Finished"},
+     {"position": "2", "positionText": "R", "points": "0",
+      "Driver": {"driverId": "antonelli", "givenName": "Andrea Kimi", "familyName": "Antonelli"},
+      "Constructor": {"constructorId": "mercedes"}, "status": "Engine"}
+   ]}
+]}}}

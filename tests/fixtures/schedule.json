@@ -1,0 +1,6 @@
+{"MRData": {"limit": "100", "offset": "0", "total": "2", "RaceTable": {"season": "2026", "Races": [
+  {"season": "2026", "round": "1", "raceName": "Australian Grand Prix", "date": "2026-03-08",
+   "Circuit": {"circuitId": "albert_park"}},
+  {"season": "2026", "round": "2", "raceName": "Chinese Grand Prix", "date": "2026-03-15",
+   "Circuit": {"circuitId": "shanghai"}, "Sprint": {"date": "2026-03-14", "time": "03:00:00Z"}}
+]}}}
