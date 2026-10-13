@@ -1,0 +1,47 @@
+name: update
+on:
+  schedule:
+    - cron: "0 8 * * 1,2"   # lundi et mardi, 8 h UTC
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Recalculer même sans nouvelle manche"
+        type: boolean
+        default: false
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+concurrency:
+  group: update
+  cancel-in-progress: false
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv python install 3.12
+      - run: uv sync
+      - run: uv run pytest -q
+      - id: run
+        run: uv run python -m f1pred run ${{ inputs.force && '--force' || '' }}
+      - if: steps.run.outputs.updated == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data
+          git diff --cached --quiet || git commit -m "data: mise à jour après la dernière manche"
+          git push
+      - if: steps.run.outputs.updated == 'true'
+        uses: actions/configure-pages@v5
+      - if: steps.run.outputs.updated == 'true'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - if: steps.run.outputs.updated == 'true'
+        id: deploy
+        uses: actions/deploy-pages@v4
