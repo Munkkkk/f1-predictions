@@ -9,7 +9,6 @@ FEATURE_COLUMNS = [
     "drv_form3", "drv_form5", "team_form5", "circuit_hist",
     "teammate_delta", "dnf_rate10", "points_share",
 ]
-NEUTRAL_POSITION = 10.5
 DEFAULT_DNF_RATE = 0.1
 
 
@@ -75,9 +74,9 @@ def build_features(results: pd.DataFrame) -> pd.DataFrame:
     gp = gp.merge(pts[["season", "round", "driver_id", "points_share"]],
                   on=["season", "round", "driver_id"], how="left")
 
-    gp["drv_form3"] = gp["drv_form3"].fillna(NEUTRAL_POSITION)
-    gp["drv_form5"] = gp["drv_form5"].fillna(NEUTRAL_POSITION)
-    gp["team_form5"] = gp["team_form5"].fillna(NEUTRAL_POSITION)
+    neutral = (gp.groupby("race_idx")["driver_id"].transform("size") + 1) / 2
+    for col in ("drv_form3", "drv_form5", "team_form5"):
+        gp[col] = gp[col].fillna(neutral)
     gp["circuit_hist"] = gp["circuit_hist"].fillna(gp["drv_form5"])
     gp["teammate_delta"] = gp["teammate_delta"].fillna(0.0)
     gp["dnf_rate10"] = gp["dnf_rate10"].fillna(DEFAULT_DNF_RATE)

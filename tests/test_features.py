@@ -33,7 +33,7 @@ def test_rolling_form_by_hand():
                          circuit_id="c", driver_id="a", driver_name="A", constructor_id="t",
                          position=pos, points=0.0, finished=True, is_sprint=False))
     feats = build_features(pd.DataFrame(rows)).set_index("round")
-    assert feats.loc[1, "drv_form3"] == pytest.approx(10.5)  # aucun passé : valeur neutre
+    assert feats.loc[1, "drv_form3"] == pytest.approx(1.0)  # aucun passé : (1 + 1) / 2
     assert feats.loc[2, "drv_form3"] == pytest.approx(1.0)
     assert feats.loc[4, "drv_form3"] == pytest.approx(3.0)  # moyenne de 1, 3, 5
 
@@ -67,3 +67,9 @@ def test_add_future_rows_creates_unknown_outcomes():
     assert new["position"].isna().all()
     feats = build_features(full)
     assert not feats[FEATURE_COLUMNS].isna().any().any()
+
+
+def test_neutral_form_scales_with_field_size():
+    results = make_results(seasons=(2025,), n_rounds=1, n_drivers=22, sprint_rounds=())
+    feats = build_features(results)
+    assert (feats["drv_form3"] == 11.5).all()
