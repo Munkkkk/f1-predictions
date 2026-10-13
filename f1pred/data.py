@@ -117,13 +117,24 @@ def fetch_season(client: JolpicaClient, season: int) -> tuple[pd.DataFrame, pd.D
     return drop_incomplete_rounds(results), schedule
 
 
+def _season_complete(raw_dir: Path, season: int) -> bool:
+    """Saison en cache complète : résultats jusqu'à la dernière manche du calendrier."""
+    results_path = raw_dir / f"results_{season}.parquet"
+    schedule_path = raw_dir / f"schedule_{season}.parquet"
+    if not (results_path.exists() and schedule_path.exists()):
+        return False
+    cached_round = pd.read_parquet(results_path, columns=["round"])["round"].max()
+    scheduled_round = pd.read_parquet(schedule_path, columns=["round"])["round"].max()
+    return cached_round == scheduled_round
+
+
 def update_cache(
     raw_dir: Path, seasons: Iterable[int], current_season: int, client: JolpicaClient
 ) -> None:
     raw_dir.mkdir(parents=True, exist_ok=True)
     for season in seasons:
         results_path = raw_dir / f"results_{season}.parquet"
-        if results_path.exists() and season != current_season:
+        if season != current_season and _season_complete(raw_dir, season):
             continue
         results, schedule = fetch_season(client, season)
         if not schedule.empty:

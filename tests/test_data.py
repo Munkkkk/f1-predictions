@@ -50,8 +50,8 @@ class FakeSession:
         return self.responses.pop(0)
 
 
-def make_client(responses):
-    return JolpicaClient(session=FakeSession(responses), sleep=lambda s: None)
+def make_client(responses, sleep=None):
+    return JolpicaClient(session=FakeSession(responses), sleep=sleep or (lambda s: None))
 
 
 def test_parse_results_columns_and_types():
@@ -94,17 +94,24 @@ def test_client_sets_custom_user_agent():
 
 
 def test_retries_on_429_then_succeeds():
+    sleeps = []
     client = make_client([FakeResponse(429), FakeResponse(500),
-                          FakeResponse(200, {"MRData": {"total": "1"}})])
+                          FakeResponse(200, {"MRData": {"total": "1"}})], sleep=sleeps.append)
     pages = client.get_pages("2026/races")
     assert len(pages) == 1
     assert len(client.session.calls) == 3
+    # Chaque tentative attend min_interval ; entre deux échecs, backoff 1.0 puis 2.0.
+    assert sleeps == [0.3, 1.0, 0.3, 2.0, 0.3]
 
 
 def test_raises_fetch_error_after_retries():
-    client = make_client([FakeResponse(503)] * 3)
+    sleeps = []
+    client = make_client([FakeResponse(503)] * 3, sleep=sleeps.append)
     with pytest.raises(FetchError, match="2026/races"):
         client.get_pages("2026/races")
+    assert len(client.session.calls) == 3
+    # Pas de backoff après la dernière tentative.
+    assert sleeps == [0.3, 1.0, 0.3, 2.0, 0.3]
 
 
 def _rows(season, rnd, n, sprint):
@@ -145,3 +152,19 @@ def test_update_cache_skips_cached_past_seasons(tmp_path):
     assert load_schedule(tmp_path, 2026)["round"].tolist() == [1, 2]
     # Les résultats 2026 (2 lignes < MIN_RESULTS) sont jugés incomplets : seule 2025 reste.
     assert set(load_results(tmp_path)["season"]) == {2025}
+
+
+def test_update_cache_refetches_past_season_missing_last_round(tmp_path):
+    # Saison 2025 mise en cache alors que la manche 2 n'était pas encore publiée.
+    pd.DataFrame(_rows(2025, 1, 22, False)).to_parquet(tmp_path / "results_2025.parquet")
+    pd.DataFrame([
+        dict(season=2025, round=1, race_name="GP", date="2025-03-01", circuit_id="c",
+             has_sprint=False),
+        dict(season=2025, round=2, race_name="GP", date="2025-03-08", circuit_id="c",
+             has_sprint=False),
+    ]).to_parquet(tmp_path / "schedule_2025.parquet")
+    empty = {"MRData": {"total": "0", "RaceTable": {"Races": []}}}
+    client = make_client([FakeResponse(200, empty)] * 3)
+    update_cache(tmp_path, [2025], current_season=2026, client=client)
+    urls = [url for url, _ in client.session.calls]
+    assert urls and all("/2025/" in url for url in urls)
