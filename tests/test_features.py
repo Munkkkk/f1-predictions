@@ -73,3 +73,10 @@ def test_neutral_form_scales_with_field_size():
     results = make_results(seasons=(2025,), n_rounds=1, n_drivers=22, sprint_rounds=())
     feats = build_features(results)
     assert (feats["drv_form3"] == 11.5).all()
+
+
+def test_add_future_rows_is_noop_without_schedule_or_lineup():
+    results = make_results(seasons=(2025,), n_rounds=2)
+    empty_sched = make_schedule(2025, 3).iloc[0:0]
+    assert add_future_rows(results, empty_sched, results.iloc[:0]) is results
+    assert add_future_rows(results, make_schedule(2025, 3), results.iloc[0:0]) is results

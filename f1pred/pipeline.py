@@ -10,7 +10,7 @@ import pandas as pd
 from f1pred.data import JolpicaClient, load_results, load_schedule, update_cache
 from f1pred.features import add_future_rows, build_features
 from f1pred.history import load_history, save_history, upsert
-from f1pred.model import predict, train
+from f1pred.model import DEFAULT_SIGMA, predict, train
 from f1pred.rules import COUNTBACK_DEPTH
 from f1pred.simulate import RaceInput, SimResult, race_finish_probs, simulate_season
 from f1pred.site import render_site
@@ -76,26 +76,28 @@ def predict_from(results: pd.DataFrame, schedule: pd.DataFrame, season: int, upt
     lineup = last_gp.drop_duplicates("driver_id")[["driver_id", "driver_name", "constructor_id"]]
     future = schedule[schedule["round"] > upto_round].sort_values("round")
 
-    feats = build_features(add_future_rows(past, future, lineup))
-    models = train(feats, current_season=season)
-    preds = predict(models, feats[feats["position"].isna()])
-
     races: list[RaceInput] = []
-    for race in future.itertuples():
-        p = (preds[preds["round"] == race.round].set_index("driver_id")
-             .reindex(state.drivers))
-        gp_input = RaceInput(
-            pred_pos=p["pred_pos"].fillna(ABSENT_POSITION).to_numpy(dtype=float),
-            p_dnf=p["p_dnf"].fillna(1.0).to_numpy(dtype=float),
-            is_sprint=False,
-        )
-        if race.has_sprint:
-            races.append(replace(gp_input, is_sprint=True))
-        races.append(gp_input)
+    sigma = DEFAULT_SIGMA
+    if not future.empty:
+        feats = build_features(add_future_rows(past, future, lineup))
+        models = train(feats, current_season=season)
+        sigma = models.sigma
+        preds = predict(models, feats[feats["position"].isna()])
+        for race in future.itertuples():
+            p = (preds[preds["round"] == race.round].set_index("driver_id")
+                 .reindex(state.drivers))
+            gp_input = RaceInput(
+                pred_pos=p["pred_pos"].fillna(ABSENT_POSITION).to_numpy(dtype=float),
+                p_dnf=p["p_dnf"].fillna(1.0).to_numpy(dtype=float),
+                is_sprint=False,
+            )
+            if race.has_sprint:
+                races.append(replace(gp_input, is_sprint=True))
+            races.append(gp_input)
 
     sim = simulate_season(state.drivers, state.points, state.countback, races,
-                          sigma=models.sigma, n_sims=n_sims, seed=seed)
-    return Checkpoint(upto_round, state, sim, races, models.sigma)
+                          sigma=sigma, n_sims=n_sims, seed=seed)
+    return Checkpoint(upto_round, state, sim, races, sigma)
 
 
 def validate(cp: Checkpoint) -> None:
@@ -140,9 +142,11 @@ def backtest_metrics(checkpoints: list[Checkpoint], results: pd.DataFrame, seaso
 
 
 def _history_entry(cp: Checkpoint, season: int, schedule: pd.DataFrame) -> dict:
-    name = schedule.loc[schedule["round"] == cp.round, "race_name"]
+    row = schedule.loc[schedule["round"] == cp.round, ["race_name", "date"]]
+    name = row["race_name"]
     return {
         "season": season, "round": cp.round,
+        "date": str(row["date"].iloc[0]) if not row.empty else "",
         "race_name": str(name.iloc[0]) if not name.empty else f"Manche {cp.round}",
         "probabilities": {d: round(p, 4) for d, p in cp.sim.p_title.items()},
     }

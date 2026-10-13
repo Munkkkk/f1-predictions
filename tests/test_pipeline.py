@@ -88,6 +88,7 @@ def test_run_offline_builds_site_then_skips(data_dir, tmp_path):
     assert (out / "methode.html").exists()
     history = load_history(data_dir / "history.json")
     assert [e["round"] for e in history] == [1, 2, 3, 4, 5]
+    assert history[0]["date"] == make_schedule(2025, 8)["date"].iloc[0]
 
     second = run(data_dir, out, offline=True, n_sims=300, today=date(2025, 6, 1))
     assert second.updated is False
@@ -123,3 +124,22 @@ def test_backtest_metrics_are_finite(data_dir):
     assert m["n_races"] == 3
     assert np.isfinite([m["brier_winner"], m["brier_podium"]]).all()
     assert 0 < m["brier_winner_baseline"] < 1
+
+
+def test_predict_from_complete_season_is_decided(tmp_path):
+    results = make_results(seasons=(2024, 2025), n_rounds=8)
+    cp = predict_from(results, make_schedule(2025, 8), 2025, 8, n_sims=200, seed=0)
+    validate(cp)
+    assert cp.sim.decided is True
+    assert cp.races == []
+    assert sum(cp.sim.p_title.values()) == pytest.approx(1.0)
+
+
+def test_run_on_completed_previous_season_shows_champion(tmp_path):
+    results = make_results(seasons=(2024, 2025), n_rounds=8)
+    write_raw(tmp_path / "data" / "raw", results,
+              [make_schedule(2024, 8), make_schedule(2025, 8)])
+    out = tmp_path / "site"
+    outcome = run(tmp_path / "data", out, offline=True, n_sims=200, today=date(2026, 1, 15))
+    assert outcome.updated is True
+    assert "Champion du monde" in (out / "index.html").read_text(encoding="utf-8")

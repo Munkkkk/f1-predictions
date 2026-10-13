@@ -13,6 +13,8 @@ DEFAULT_DNF_RATE = 0.1
 
 
 def add_future_rows(results: pd.DataFrame, schedule: pd.DataFrame, lineup: pd.DataFrame):
+    if schedule.empty or lineup.empty:
+        return results
     rows = [
         {
             "season": race.season, "round": race.round, "race_name": race.race_name,
