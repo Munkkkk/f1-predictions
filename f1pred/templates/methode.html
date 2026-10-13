@@ -26,6 +26,7 @@
     finit en tête, avec le départage officiel (nombre de victoires, puis de 2es places…).</p>
 
   <h2>4. Précision mesurée</h2>
+  {% if backtest.n_races %}
   <p>Après chacune des {{ backtest.n_races }} dernières courses de la saison, on a refait la
     prédiction de la course suivante avec uniquement les données disponibles à ce moment-là.
     Score de Brier : plus il est bas, mieux c'est ; la référence donne la même chance à tout
@@ -39,6 +40,9 @@
         <td class="num">{{ "%.3f"|format(backtest.brier_podium_baseline) }}</td></tr>
     </tbody>
   </table>
+  {% else %}
+  <p>Pas encore assez de courses terminées pour mesurer la précision.</p>
+  {% endif %}
 
   <h2>5. Limites</h2>
   <p>Le modèle ignore les qualifications, la météo, les pénalités moteur et les évolutions

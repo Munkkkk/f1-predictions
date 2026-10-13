@@ -39,3 +39,26 @@ def test_champion_banner_only_when_decided(tmp_path):
     assert "Champion du monde" not in (tmp_path / "index.html").read_text(encoding="utf-8")
     render_site(tmp_path, context(decided=True))
     assert "Champion du monde" in (tmp_path / "index.html").read_text(encoding="utf-8")
+
+
+def test_no_backtest_shows_fallback_not_nan(tmp_path):
+    ctx = context()
+    nan = float("nan")
+    ctx["backtest"] = {"n_races": 0, "brier_winner": nan, "brier_winner_baseline": nan,
+                       "brier_podium": nan, "brier_podium_baseline": nan}
+    render_site(tmp_path, ctx)
+    methode = (tmp_path / "methode.html").read_text(encoding="utf-8")
+    assert "nan" not in methode.lower()
+    assert "Pas encore assez de courses terminées" in methode
+
+
+def test_line_colors_follow_driver_not_rank():
+    from f1pred.site import _line_colors
+
+    def drv(i):
+        return {"driver_id": i}
+
+    a = _line_colors([drv("x"), drv("b"), drv("c"), drv("d")])
+    b = _line_colors([drv("x"), drv("d"), drv("b"), drv("c")])
+    assert a == b
+    assert len(set(a.values())) == len(a)

@@ -7,9 +7,10 @@ from jinja2 import Environment, PackageLoader, select_autoescape
 
 ACCENT = "#e10600"
 MUTED = "#8a8f98"
-# Teintes catégorielles dans l'ordre fixe (palette de référence dataviz : bleu, aqua,
-# violet, jaune, magenta), attribuées par rang du pilote ; le leader garde l'accent.
-SERIES = ["#2a78d6", "#1baf7a", "#8a7ae0", "#eda100", "#e87ba4"]
+# Teintes catégorielles (bleu, vert, violet, ambre, magenta), toutes à >= 3:1 de contraste
+# contre les cartes claire (#f4f4f6) et sombre (#1a1a22). Attribuées par identité du pilote
+# (ordre alphabétique des driver_id tracés) ; le leader garde l'accent.
+SERIES = ["#2a78d6", "#0e8f6a", "#7c6ad8", "#b07a00", "#c0508a"]
 TOP_N_BARS = 10
 TOP_N_LINES = 6
 
@@ -40,14 +41,23 @@ def _bars(drivers: list[dict]) -> str:
     return _layout(fig, 40 * len(top) + 40).to_html(full_html=False, include_plotlyjs=False)
 
 
+def _line_colors(drivers: list[dict]) -> dict[str, str]:
+    plotted = [d["driver_id"] for d in drivers[:TOP_N_LINES]]
+    colors = {plotted[0]: ACCENT} if plotted else {}
+    for driver_id, color in zip(sorted(plotted[1:]), SERIES, strict=False):
+        colors[driver_id] = color
+    return colors
+
+
 def _lines(history: list[dict], names: dict[str, str], drivers: list[dict]) -> str:
     fig = go.Figure()
+    colors = _line_colors(drivers)
     x = [e["race_name"].replace(" Grand Prix", "") for e in history]
     for i, d in enumerate(drivers[:TOP_N_LINES]):
         y = [e["probabilities"].get(d["driver_id"], 0.0) * 100 for e in history]
         fig.add_trace(go.Scatter(
             x=x, y=y, mode="lines+markers", name=names.get(d["driver_id"], d["driver_id"]),
-            line=dict(width=3 if i == 0 else 2, color=ACCENT if i == 0 else SERIES[i - 1]),
+            line=dict(width=3 if i == 0 else 2, color=colors[d["driver_id"]]),
             marker=dict(size=8),
             hovertemplate="%{fullData.name} : %{y:.1f} %<extra></extra>",
         ))
