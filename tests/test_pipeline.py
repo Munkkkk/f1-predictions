@@ -1,0 +1,125 @@
+from datetime import date
+
+import numpy as np
+import pandas as pd
+import pytest
+
+from f1pred.cli import main
+from f1pred.history import load_history
+from f1pred.pipeline import ValidationError, predict_from, run, season_state, validate
+from tests.helpers import make_results, make_schedule
+
+
+def write_raw(raw, results, schedules):
+    raw.mkdir(parents=True, exist_ok=True)
+    for season, df in results.groupby("season"):
+        df.to_parquet(raw / f"results_{season}.parquet", index=False)
+    for sched in schedules:
+        sched.to_parquet(raw / f"schedule_{int(sched['season'].iloc[0])}.parquet", index=False)
+
+
+@pytest.fixture
+def data_dir(tmp_path):
+    past = make_results(seasons=(2023, 2024), n_rounds=8)
+    current = make_results(seasons=(2025,), n_rounds=5, seed=3)
+    results = pd.concat([past, current], ignore_index=True)
+    write_raw(tmp_path / "data" / "raw", results,
+              [make_schedule(2024, 8), make_schedule(2025, 8)])
+    return tmp_path / "data"
+
+
+def test_season_state_counts_points_and_wins():
+    results = make_results(seasons=(2025,), n_rounds=3, sprint_rounds=())
+    state = season_state(results, 2025)
+    cur = results.set_index("driver_id")
+    assert state.last_round == 3
+    i = state.drivers.index("d0")
+    assert state.points[i] == int(cur.loc["d0", "points"].sum())
+    is_d0_win = (results["driver_id"] == "d0") & (results["position"] == 1)
+    wins = (is_d0_win & results["finished"]).sum()
+    assert state.countback[i, 0] == wins
+
+
+def test_predict_from_gives_valid_probabilities(data_dir):
+    from f1pred.data import load_results, load_schedule
+    results = load_results(data_dir / "raw")
+    cp = predict_from(results, load_schedule(data_dir / "raw", 2025), 2025, 5,
+                      n_sims=500, seed=0)
+    validate(cp)
+    assert len(cp.races) == 3  # manches 6, 7, 8 (aucun sprint après la 5)
+    assert sum(cp.sim.p_title.values()) == pytest.approx(1.0)
+
+
+def test_replaced_driver_keeps_points_but_scores_nothing(data_dir):
+    from f1pred.data import load_results, load_schedule
+    results = load_results(data_dir / "raw")
+    # d9 est remplacé par "rookie" à la manche 5.
+    mask = (results["season"] == 2025) & (results["round"] == 5) & (results["driver_id"] == "d9")
+    results.loc[mask, ["driver_id", "driver_name"]] = ["rookie", "Rookie"]
+    cp = predict_from(results, load_schedule(data_dir / "raw", 2025), 2025, 5,
+                      n_sims=500, seed=0)
+    validate(cp)
+    i = cp.state.drivers.index("d9")
+    before = cp.state.points[i]
+    assert cp.sim.expected_points["d9"] == pytest.approx(before)
+    assert "rookie" in cp.sim.p_title
+
+
+def test_validate_rejects_bad_probabilities(data_dir):
+    from f1pred.data import load_results, load_schedule
+    results = load_results(data_dir / "raw")
+    cp = predict_from(results, load_schedule(data_dir / "raw", 2025), 2025, 5,
+                      n_sims=200, seed=0)
+    cp.sim.p_title[cp.state.drivers[0]] += 0.5
+    with pytest.raises(ValidationError):
+        validate(cp)
+    cp.sim.p_title[cp.state.drivers[0]] = float("nan")
+    with pytest.raises(ValidationError):
+        validate(cp)
+
+
+def test_run_offline_builds_site_then_skips(data_dir, tmp_path):
+    out = tmp_path / "site"
+    first = run(data_dir, out, offline=True, n_sims=300, today=date(2025, 6, 1))
+    assert first.updated is True
+    index = (out / "index.html").read_text(encoding="utf-8")
+    for i in range(10):
+        assert f"Pilote {i}" in index
+    assert (out / "methode.html").exists()
+    history = load_history(data_dir / "history.json")
+    assert [e["round"] for e in history] == [1, 2, 3, 4, 5]
+
+    second = run(data_dir, out, offline=True, n_sims=300, today=date(2025, 6, 1))
+    assert second.updated is False
+
+    forced = run(data_dir, out, offline=True, n_sims=300, today=date(2025, 6, 1), force=True)
+    assert forced.updated is True
+
+
+def test_run_falls_back_to_previous_season_in_january(data_dir, tmp_path):
+    outcome = run(data_dir, tmp_path / "site", offline=True, n_sims=200, today=date(2026, 1, 15))
+    assert outcome.updated is True
+    assert "2025" in outcome.message
+
+
+def test_cli_writes_github_output(data_dir, tmp_path, monkeypatch):
+    gh_out = tmp_path / "gh_output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(gh_out))
+    monkeypatch.setattr("f1pred.cli.date", type("D", (), {"today": staticmethod(
+        lambda: date(2025, 6, 1))}))
+    code = main(["run", "--offline", "--sims", "200", "--data-dir", str(data_dir),
+                 "--out", str(tmp_path / "site")])
+    assert code == 0
+    assert "updated=true" in gh_out.read_text(encoding="utf-8")
+
+
+def test_backtest_metrics_are_finite(data_dir):
+    from f1pred.data import load_results, load_schedule
+    from f1pred.pipeline import backtest_metrics
+    results = load_results(data_dir / "raw")
+    sched = load_schedule(data_dir / "raw", 2025)
+    cps = [predict_from(results, sched, 2025, r, n_sims=200, seed=0) for r in (1, 2, 3)]
+    m = backtest_metrics(cps, results, 2025, n_sims=200, seed=0)
+    assert m["n_races"] == 3
+    assert np.isfinite([m["brier_winner"], m["brier_podium"]]).all()
+    assert 0 < m["brier_winner_baseline"] < 1
