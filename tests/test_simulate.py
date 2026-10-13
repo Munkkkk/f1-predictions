@@ -142,3 +142,16 @@ def test_remaining_max_points():
     races = [gp([1.0, 2.0]), gp([1.0, 2.0], sprint=True), gp([1.0, 2.0])]
     assert remaining_max_points(races, 2) == 58
     assert remaining_max_points([], 22) == 0
+
+
+def test_chunked_simulation_merges_counts():
+    races = [gp([1.0, 2.0, 3.0, 4.0], dnf=[0.1] * 4) for _ in range(3)]
+    args = (["a", "b", "c", "d"], np.array([40, 35, 30, 0]), zeros_cb(4), races)
+    whole = simulate_season(*args, sigma=3.0, n_sims=30_000, seed=2)
+    chunked = simulate_season(*args, sigma=3.0, n_sims=30_000, seed=2, chunk_size=7_000)
+    assert sum(chunked.p_title.values()) == pytest.approx(1.0)
+    for d in "abcd":
+        assert chunked.p_title[d] == pytest.approx(whole.p_title[d], abs=0.015)
+        assert chunked.expected_points[d] == pytest.approx(whole.expected_points[d], abs=1.0)
+    again = simulate_season(*args, sigma=3.0, n_sims=30_000, seed=2, chunk_size=7_000)
+    assert again == chunked

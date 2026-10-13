@@ -194,8 +194,13 @@ def _context(final: Checkpoint, season: int, history: list[dict], metrics: dict,
     }
 
 
+FINAL_SIMS = 200_000  # checkpoint publié : assez de tirages pour les probabilités rares
+
+
 def run(data_dir: Path, out_dir: Path, offline: bool, seed: int = 0, n_sims: int = 10_000,
-        force: bool = False, today: date | None = None, client=None) -> Outcome:
+        force: bool = False, today: date | None = None, client=None,
+        n_sims_final: int = FINAL_SIMS) -> Outcome:
+    """`n_sims` pour l'historique et le backtest ; `n_sims_final` pour la dernière manche."""
     today = today or date.today()
     raw = data_dir / "raw"
     if not offline:
@@ -214,7 +219,8 @@ def run(data_dir: Path, out_dir: Path, offline: bool, seed: int = 0, n_sims: int
 
     checkpoints = []
     for rnd in rounds:
-        cp = predict_from(results, schedule, season, rnd, n_sims, seed)
+        cp = predict_from(results, schedule, season, rnd,
+                          n_sims_final if rnd == last else n_sims, seed)
         validate(cp)
         checkpoints.append(cp)
         history = upsert(history, _history_entry(cp, season, schedule))
@@ -222,6 +228,6 @@ def run(data_dir: Path, out_dir: Path, offline: bool, seed: int = 0, n_sims: int
 
     first_season = int(results["season"].min())
     render_site(out_dir, _context(checkpoints[-1], season, history, metrics, schedule,
-                                  n_sims, today, first_season))
+                                  n_sims_final, today, first_season))
     save_history(hist_path, history)
     return Outcome(True, f"Site mis à jour : saison {season}, manche {last}.")

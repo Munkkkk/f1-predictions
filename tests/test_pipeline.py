@@ -80,7 +80,8 @@ def test_validate_rejects_bad_probabilities(data_dir):
 
 def test_run_offline_builds_site_then_skips(data_dir, tmp_path):
     out = tmp_path / "site"
-    first = run(data_dir, out, offline=True, n_sims=300, today=date(2025, 6, 1))
+    small = dict(offline=True, n_sims=300, n_sims_final=300, today=date(2025, 6, 1))
+    first = run(data_dir, out, **small)
     assert first.updated is True
     index = (out / "index.html").read_text(encoding="utf-8")
     for i in range(10):
@@ -90,15 +91,16 @@ def test_run_offline_builds_site_then_skips(data_dir, tmp_path):
     assert [e["round"] for e in history] == [1, 2, 3, 4, 5]
     assert history[0]["date"] == make_schedule(2025, 8)["date"].iloc[0]
 
-    second = run(data_dir, out, offline=True, n_sims=300, today=date(2025, 6, 1))
+    second = run(data_dir, out, **small)
     assert second.updated is False
 
-    forced = run(data_dir, out, offline=True, n_sims=300, today=date(2025, 6, 1), force=True)
+    forced = run(data_dir, out, **small, force=True)
     assert forced.updated is True
 
 
 def test_run_falls_back_to_previous_season_in_january(data_dir, tmp_path):
-    outcome = run(data_dir, tmp_path / "site", offline=True, n_sims=200, today=date(2026, 1, 15))
+    outcome = run(data_dir, tmp_path / "site", offline=True, n_sims=200, n_sims_final=200,
+                  today=date(2026, 1, 15))
     assert outcome.updated is True
     assert "2025" in outcome.message
 
@@ -108,8 +110,8 @@ def test_cli_writes_github_output(data_dir, tmp_path, monkeypatch):
     monkeypatch.setenv("GITHUB_OUTPUT", str(gh_out))
     monkeypatch.setattr("f1pred.cli.date", type("D", (), {"today": staticmethod(
         lambda: date(2025, 6, 1))}))
-    code = main(["run", "--offline", "--sims", "200", "--data-dir", str(data_dir),
-                 "--out", str(tmp_path / "site")])
+    code = main(["run", "--offline", "--sims", "200", "--sims-final", "200",
+                 "--data-dir", str(data_dir), "--out", str(tmp_path / "site")])
     assert code == 0
     assert "updated=true" in gh_out.read_text(encoding="utf-8")
 
@@ -140,7 +142,8 @@ def test_run_on_completed_previous_season_shows_champion(tmp_path):
     write_raw(tmp_path / "data" / "raw", results,
               [make_schedule(2024, 8), make_schedule(2025, 8)])
     out = tmp_path / "site"
-    outcome = run(tmp_path / "data", out, offline=True, n_sims=200, today=date(2026, 1, 15))
+    outcome = run(tmp_path / "data", out, offline=True, n_sims=200, n_sims_final=200,
+                  today=date(2026, 1, 15))
     assert outcome.updated is True
     assert "Champion du monde" in (out / "index.html").read_text(encoding="utf-8")
 
@@ -170,3 +173,31 @@ def test_context_never_marks_eliminated_once_decided():
     ctx = _context(cp, 2025, [], {}, sched, 200, date(2026, 1, 15), 2024)
     assert ctx["remaining_points"] == 0
     assert not any(d["eliminated"] for d in ctx["drivers"])
+
+
+def test_final_checkpoint_uses_more_simulations(data_dir, tmp_path, monkeypatch):
+    import f1pred.pipeline as pl
+    calls, contexts = [], []
+    real = pl.predict_from
+
+    def spy(results, schedule, season, rnd, n_sims, seed, **kw):
+        calls.append((rnd, n_sims))
+        return real(results, schedule, season, rnd, n_sims, seed, **kw)
+
+    monkeypatch.setattr(pl, "predict_from", spy)
+    monkeypatch.setattr(pl, "render_site", lambda out, ctx: contexts.append(ctx))
+    run(data_dir, tmp_path / "site", offline=True, n_sims=200, n_sims_final=400,
+        today=date(2025, 6, 1))
+    assert calls == [(1, 200), (2, 200), (3, 200), (4, 200), (5, 400)]
+    assert contexts[0]["n_sims"] == 400
+
+
+def test_cli_passes_final_sims(data_dir, tmp_path, monkeypatch):
+    seen = {}
+    monkeypatch.setattr("f1pred.cli.pipeline.run",
+                        lambda *a, **kw: seen.update(kw) or type("O", (), {
+                            "updated": False, "message": "ok"})())
+    assert main(["run", "--offline", "--sims-final", "1234"]) == 0
+    assert seen["n_sims_final"] == 1234
+    main(["run", "--offline"])
+    assert seen["n_sims_final"] == 200_000
