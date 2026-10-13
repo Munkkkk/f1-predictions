@@ -12,7 +12,14 @@ from f1pred.features import add_future_rows, build_features
 from f1pred.history import load_history, save_history, upsert
 from f1pred.model import DEFAULT_SIGMA, predict, train
 from f1pred.rules import COUNTBACK_DEPTH
-from f1pred.simulate import RaceInput, SimResult, race_finish_probs, simulate_season
+from f1pred.simulate import (
+    RaceInput,
+    SimResult,
+    contenders,
+    race_finish_probs,
+    remaining_max_points,
+    simulate_season,
+)
 from f1pred.site import render_site
 
 FIRST_SEASON = 2014
@@ -40,6 +47,9 @@ class Checkpoint:
     sim: SimResult
     races: list[RaceInput]
     sigma: float
+    tau_driver: float = 0.0
+    tau_team: float = 0.0
+    dnf_shock: float = 0.0
 
 
 @dataclass
@@ -78,10 +88,12 @@ def predict_from(results: pd.DataFrame, schedule: pd.DataFrame, season: int, upt
 
     races: list[RaceInput] = []
     sigma = DEFAULT_SIGMA
+    shocks = {"tau_driver": 0.0, "tau_team": 0.0, "dnf_shock": 0.0}
     if not future.empty:
         feats = build_features(add_future_rows(past, future, lineup))
         models = train(feats, current_season=season)
         sigma = models.sigma
+        shocks = {k: getattr(models, k) for k in shocks}
         preds = predict(models, feats[feats["position"].isna()])
         for race in future.itertuples():
             p = (preds[preds["round"] == race.round].set_index("driver_id")
@@ -96,8 +108,9 @@ def predict_from(results: pd.DataFrame, schedule: pd.DataFrame, season: int, upt
             races.append(gp_input)
 
     sim = simulate_season(state.drivers, state.points, state.countback, races,
-                          sigma=sigma, n_sims=n_sims, seed=seed)
-    return Checkpoint(upto_round, state, sim, races, sigma)
+                          sigma=sigma, n_sims=n_sims, seed=seed,
+                          teams=[state.teams[d] for d in state.drivers], **shocks)
+    return Checkpoint(upto_round, state, sim, races, sigma, **shocks)
 
 
 def validate(cp: Checkpoint) -> None:
@@ -155,12 +168,16 @@ def _history_entry(cp: Checkpoint, season: int, schedule: pd.DataFrame) -> dict:
 def _context(final: Checkpoint, season: int, history: list[dict], metrics: dict,
              schedule: pd.DataFrame, n_sims: int, today: date, first_season: int) -> dict:
     st = final.state
+    remaining = remaining_max_points(final.races, len(st.drivers))
+    alive = contenders(st.points, remaining) | final.sim.decided
     drivers = sorted(
         ({"driver_id": d, "name": st.names[d], "team": st.teams[d],
-          "points": int(st.points[i]), "p_title": final.sim.p_title[d],
+          "points": int(st.points[i]), "max_points": int(st.points[i]) + remaining,
+          "eliminated": not bool(alive[i]), "p_title": final.sim.p_title[d],
           "expected_points": final.sim.expected_points[d]} for i, d in enumerate(st.drivers)),
         key=lambda x: (-x["p_title"], -x["points"]),
     )
+    n_sprints = sum(r.is_sprint for r in final.races)
     last = schedule.loc[schedule["round"] == final.round, "race_name"]
     return {
         "season": season, "updated_at": today.isoformat(),
@@ -171,6 +188,9 @@ def _context(final: Checkpoint, season: int, history: list[dict], metrics: dict,
         "history": [e for e in history if e["season"] == season],
         "names": st.names, "backtest": metrics, "sigma": final.sigma, "n_sims": n_sims,
         "train_seasons": f"{first_season}–{season}",
+        "remaining_points": remaining, "remaining_gp": len(final.races) - n_sprints,
+        "remaining_sprints": n_sprints, "tau_driver": final.tau_driver,
+        "tau_team": final.tau_team, "dnf_shock": final.dnf_shock,
     }
 
 

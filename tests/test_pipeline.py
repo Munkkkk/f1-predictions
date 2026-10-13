@@ -143,3 +143,30 @@ def test_run_on_completed_previous_season_shows_champion(tmp_path):
     outcome = run(tmp_path / "data", out, offline=True, n_sims=200, today=date(2026, 1, 15))
     assert outcome.updated is True
     assert "Champion du monde" in (out / "index.html").read_text(encoding="utf-8")
+
+
+def test_context_reports_remaining_points_and_eliminations(data_dir):
+    from f1pred.data import load_results
+    from f1pred.pipeline import _context
+    results = load_results(data_dir / "raw")
+    sched = make_schedule(2025, 8, sprint_rounds=(3, 7))
+    cp = predict_from(results, sched, 2025, 5, n_sims=200, seed=0)
+    ctx = _context(cp, 2025, [], {}, sched, 200, date(2025, 6, 1), 2023)
+    assert (ctx["remaining_gp"], ctx["remaining_sprints"]) == (3, 1)
+    assert ctx["remaining_points"] == 25 * 3 + 8 * 1
+    leader = max(cp.state.points)
+    for d in ctx["drivers"]:
+        assert d["max_points"] == d["points"] + ctx["remaining_points"]
+        assert d["eliminated"] == (d["max_points"] < leader)
+    assert {"tau_driver", "tau_team", "dnf_shock"} <= ctx.keys()
+    assert ctx["tau_driver"] == cp.tau_driver
+
+
+def test_context_never_marks_eliminated_once_decided():
+    from f1pred.pipeline import _context
+    results = make_results(seasons=(2024, 2025), n_rounds=8)
+    sched = make_schedule(2025, 8)
+    cp = predict_from(results, sched, 2025, 8, n_sims=200, seed=0)
+    ctx = _context(cp, 2025, [], {}, sched, 200, date(2026, 1, 15), 2024)
+    assert ctx["remaining_points"] == 0
+    assert not any(d["eliminated"] for d in ctx["drivers"])

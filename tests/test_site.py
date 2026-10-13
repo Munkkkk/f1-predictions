@@ -7,9 +7,11 @@ def context(decided=False):
         "decided": decided, "champion": "Andrea Kimi Antonelli" if decided else None,
         "drivers": [
             {"driver_id": "antonelli", "name": "Andrea Kimi Antonelli", "team": "mercedes",
-             "points": 340, "p_title": 0.91, "expected_points": 410.0},
+             "points": 340, "p_title": 0.91, "expected_points": 410.0,
+             "max_points": 490, "eliminated": False},
             {"driver_id": "russell", "name": "George Russell", "team": "mercedes",
-             "points": 238, "p_title": 0.09, "expected_points": 320.0},
+             "points": 238, "p_title": 0.09, "expected_points": 320.0,
+             "max_points": 388, "eliminated": False},
         ],
         "history": [
             {"season": 2026, "round": 1, "race_name": "Australian Grand Prix",
@@ -21,6 +23,8 @@ def context(decided=False):
         "backtest": {"n_races": 16, "brier_winner": 0.612, "brier_winner_baseline": 0.955,
                      "brier_podium": 0.081, "brier_podium_baseline": 0.124},
         "sigma": 3.4, "n_sims": 10000, "train_seasons": "2014–2026",
+        "remaining_points": 150, "remaining_gp": 6, "remaining_sprints": 0,
+        "tau_driver": 1.83, "tau_team": 1.21, "dnf_shock": 0.62,
     }
 
 
@@ -81,3 +85,37 @@ def test_undecided_certain_title_never_shows_100(tmp_path):
     assert "&gt; 99,9 %" in index or "> 99,9 %" in index
     table = index.split("<tbody>")[1].split("</tbody>")[0]
     assert "100" not in table and "99,9" in table and "0,1" in table
+
+
+def test_remaining_points_line_only_while_open(tmp_path):
+    render_site(tmp_path, context(decided=False))
+    index = (tmp_path / "index.html").read_text(encoding="utf-8")
+    assert "Il reste <strong>150 points</strong> en jeu (6 GP)" in index
+    assert "sprint" not in index.split("Il reste")[1].split("</p>")[0]
+    ctx = context(decided=False)
+    ctx.update(remaining_points=166, remaining_gp=6, remaining_sprints=2)
+    render_site(tmp_path, ctx)
+    index = (tmp_path / "index.html").read_text(encoding="utf-8")
+    assert "Il reste <strong>166 points</strong> en jeu (6 GP, 2 sprints)" in index
+    render_site(tmp_path, context(decided=True))
+    assert "Il reste" not in (tmp_path / "index.html").read_text(encoding="utf-8")
+
+
+def test_eliminated_driver_and_max_points_column(tmp_path):
+    ctx = context()
+    ctx["drivers"][1].update(p_title=0.0, eliminated=True)
+    render_site(tmp_path, ctx)
+    index = (tmp_path / "index.html").read_text(encoding="utf-8")
+    assert "Points max" in index
+    table = index.split("<tbody>")[1].split("</tbody>")[0]
+    russell = table.split("George Russell")[1].split("</tr>")[0]
+    assert "Éliminé" in russell and "388" in russell
+    antonelli = table.split("Andrea Kimi Antonelli")[1].split("</tr>")[0]
+    assert "Éliminé" not in antonelli and "490" in antonelli
+
+
+def test_methode_explains_persistent_shocks(tmp_path):
+    render_site(tmp_path, context())
+    methode = (tmp_path / "methode.html").read_text(encoding="utf-8")
+    assert "±1,8 place" in methode and "±1,2 place" in methode and "0,6" in methode
+    assert "abandons" in methode

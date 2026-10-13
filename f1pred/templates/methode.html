@@ -24,6 +24,14 @@
     modèle), on tire au sort les abandons, puis on attribue les points du barème officiel. On
     répète {{ n_sims | int_fr }} fois. La probabilité de titre est la part des simulations où le pilote
     finit en tête, avec le départage officiel (nombre de victoires, puis de 2es places…).</p>
+  <p>Une saison ne se résume pas à des courses indépendantes : une voiture peut rester
+    lente plusieurs week-ends, un moteur peut casser à répétition. Chaque saison simulée a
+    donc sa propre forme par pilote et par écurie, et sa propre fiabilité : certaines
+    simulations contiennent des séries d'abandons ou une écurie en difficulté jusqu'à la
+    fin. L'ampleur de ces écarts est mesurée sur les 10 dernières courses et sur les
+    abandons de la saison : forme du pilote ±{{ tau_driver | fr(1) }} place, forme de
+    l'écurie ±{{ tau_team | fr(1) }} place, fiabilité ×e<sup>±{{ dnf_shock | fr(1) }}</sup>
+    (le taux d'abandon de chaque pilote est multiplié ou divisé d'autant).</p>
 
   <h2>4. Précision mesurée</h2>
   {% if backtest.n_races %}

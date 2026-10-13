@@ -7,6 +7,11 @@
   <h1>Qui sera champion du monde {{ season }} ?</h1>
   <p class="sub">Probabilité de titre pilotes, d'après {{ n_sims | int_fr }}
     simulations de la fin de saison.</p>
+  {% if not decided %}
+  {% set sprints = remaining_sprints ~ (" sprints" if remaining_sprints > 1 else " sprint") %}
+  <p class="sub">Il reste <strong>{{ remaining_points }} points</strong> en jeu ({{ remaining_gp }} GP
+    {%- if remaining_sprints %}, {{ sprints }}{% endif %}).</p>
+  {% endif %}
 
   <div class="card">{{ bars_html | safe }}</div>
 
@@ -16,12 +21,14 @@
   <h2>Détail</h2>
   <table>
     <thead><tr><th>Pilote</th><th class="num">Points</th>
+      <th class="num">Points max</th>
       <th class="num">Points attendus</th><th class="num">Titre</th></tr></thead>
     <tbody>
     {% for d in drivers %}
       <tr><td>{{ d.name }}</td><td class="num">{{ d.points }}</td>
+        <td class="num">{{ d.max_points }}</td>
         <td class="num">{{ "%.0f"|format(d.expected_points) }}</td>
-        <td class="num">{{ d.p_title | pct(decided) }}</td></tr>
+        <td class="num">{% if d.eliminated %}Éliminé{% else %}{{ d.p_title | pct(decided) }}{% endif %}</td></tr>
     {% endfor %}
     </tbody>
   </table>

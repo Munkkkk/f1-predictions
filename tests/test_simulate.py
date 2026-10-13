@@ -1,7 +1,14 @@
 import numpy as np
 import pytest
 
-from f1pred.simulate import RaceInput, race_finish_probs, simulate_season
+from f1pred.simulate import (
+    RaceInput,
+    _simulate_totals,
+    contenders,
+    race_finish_probs,
+    remaining_max_points,
+    simulate_season,
+)
 
 
 def zeros_cb(n):
@@ -72,3 +79,66 @@ def test_race_finish_probs():
     win, podium = race_finish_probs(gp([1.0, 2.0, 3.0, 4.0]), sigma=0.0, n_sims=100)
     assert list(win) == [1.0, 0.0, 0.0, 0.0]
     assert list(podium) == [1.0, 1.0, 1.0, 0.0]
+
+
+# Sorties de simulate_season figées avant l'ajout des chocs (commit 1f2d73d).
+PINNED_P_TITLE = {"a": 0.6563333333333333, "b": 0.26866666666666666,
+                  "c": 0.07466666666666667, "d": 0.0003333333333333333}
+PINNED_EXPECTED = {"a": 101.638, "b": 90.546, "c": 76.245, "d": 52.76433333333333}
+
+
+def test_default_shock_kwargs_reproduce_previous_output():
+    races = [gp([1.0, 2.5, 3.0, 4.0], dnf=[0.1, 0.1, 0.2, 0.05], sprint=i == 1)
+             for i in range(4)]
+    args = (["a", "b", "c", "d"], np.array([40, 35, 30, 0]), zeros_cb(4), races)
+    base = simulate_season(*args, sigma=3.0, n_sims=3000, seed=11)
+    same = simulate_season(*args, sigma=3.0, n_sims=3000, seed=11, teams=None,
+                           tau_driver=0.0, tau_team=0.0, dnf_shock=0.0)
+    with_teams = simulate_season(*args, sigma=3.0, n_sims=3000, seed=11,
+                                 teams=["x", "x", "y", "y"])
+    assert base.p_title == PINNED_P_TITLE and base.expected_points == PINNED_EXPECTED
+    assert same.p_title == base.p_title and same.expected_points == base.expected_points
+    assert with_teams == base
+
+
+def test_driver_form_shock_helps_trailing_driver():
+    # b doit gagner les 3 courses (écart max 3 x 7 = 21 > 20) : la forme persistante aide.
+    races = [gp([1.5, 1.5]) for _ in range(3)]
+    args = (["a", "b"], np.array([60, 40]), zeros_cb(2), races)
+    calm = simulate_season(*args, sigma=2.0, n_sims=20_000, seed=3)
+    shaky = simulate_season(*args, sigma=2.0, n_sims=20_000, seed=3, tau_driver=3.0)
+    assert 0 < calm.p_title["b"] < shaky.p_title["b"]
+
+
+def test_team_shock_correlates_teammates():
+    races = [gp([2.0, 2.5, 2.0, 2.5]) for _ in range(5)]
+    total, _, _ = _simulate_totals(np.zeros(4, dtype=int), zeros_cb(4), races, sigma=1.0,
+                                   n_sims=5000, seed=0, teams=["A", "A", "B", "B"],
+                                   tau_team=4.0)
+    corr = np.corrcoef(total[:, 0], total[:, 1])[0, 1]
+    assert corr > 0.3
+
+
+def test_dnf_shock_keeps_mean_and_adds_dispersion():
+    n_races, n = 10, 6
+    races = [gp(np.arange(1.0, n + 1), dnf=np.full(n, 0.1)) for _ in range(n_races)]
+
+    def dnf_counts(shock):
+        *_, dnfs = _simulate_totals(np.zeros(n, dtype=int), zeros_cb(n), races, sigma=0.0,
+                                    n_sims=20_000, seed=5, dnf_shock=shock)
+        return dnfs
+
+    base, shocked = dnf_counts(0.0), dnf_counts(0.8)
+    assert abs(shocked.mean() / n_races - 0.1) < 0.02
+    assert shocked.var() > base.var()
+
+
+def test_contenders_and_tie():
+    assert list(contenders(np.array([340, 238, 221, 138]), 150)) == [True, True, True, False]
+    assert list(contenders(np.array([340, 190]), 150)) == [True, True]
+
+
+def test_remaining_max_points():
+    races = [gp([1.0, 2.0]), gp([1.0, 2.0], sprint=True), gp([1.0, 2.0])]
+    assert remaining_max_points(races, 2) == 58
+    assert remaining_max_points([], 22) == 0
