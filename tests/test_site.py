@@ -25,6 +25,7 @@ def context(decided=False):
         "sigma": 3.4, "n_sims": 10000, "train_seasons": "2014–2026",
         "remaining_points": 150, "remaining_gp": 6, "remaining_sprints": 0,
         "tau_driver": 1.83, "tau_team": 1.21, "dnf_shock": 0.62,
+        "shock_horizon": 6, "shock_seasons": "2025–2026",
     }
 
 
@@ -119,3 +120,13 @@ def test_methode_explains_persistent_shocks(tmp_path):
     methode = (tmp_path / "methode.html").read_text(encoding="utf-8")
     assert "±1,8 place" in methode and "±1,2 place" in methode and "0,6" in methode
     assert "abandons" in methode
+
+
+def test_methode_describes_shock_window_and_hides_values_once_decided(tmp_path):
+    render_site(tmp_path, context())
+    methode = (tmp_path / "methode.html").read_text(encoding="utf-8")
+    assert "10 dernières courses" not in methode
+    assert "6 courses suivantes" in methode and "2025–2026" in methode
+    render_site(tmp_path, context(decided=True))
+    methode = (tmp_path / "methode.html").read_text(encoding="utf-8")
+    assert "±1,8" not in methode and "±0,0" not in methode

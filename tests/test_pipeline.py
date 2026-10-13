@@ -162,7 +162,8 @@ def test_context_reports_remaining_points_and_eliminations(data_dir):
         assert d["max_points"] == d["points"] + ctx["remaining_points"]
         assert d["eliminated"] == (d["max_points"] < leader)
     assert {"tau_driver", "tau_team", "dnf_shock"} <= ctx.keys()
-    assert ctx["tau_driver"] == cp.tau_driver
+    assert ctx["tau_driver"] == cp.shocks.tau_driver
+    assert ctx["sigma"] == cp.shocks.sigma
 
 
 def test_context_never_marks_eliminated_once_decided():
@@ -178,13 +179,13 @@ def test_context_never_marks_eliminated_once_decided():
 def test_final_checkpoint_uses_more_simulations(data_dir, tmp_path, monkeypatch):
     import f1pred.pipeline as pl
     calls, contexts = [], []
-    real = pl.predict_from
+    real = pl.simulate_forecast
 
-    def spy(results, schedule, season, rnd, n_sims, seed, **kw):
-        calls.append((rnd, n_sims))
-        return real(results, schedule, season, rnd, n_sims, seed, **kw)
+    def spy(fc, n_sims, seed, shocks=None):
+        calls.append((fc.round, n_sims))
+        return real(fc, n_sims, seed, shocks)
 
-    monkeypatch.setattr(pl, "predict_from", spy)
+    monkeypatch.setattr(pl, "simulate_forecast", spy)
     monkeypatch.setattr(pl, "render_site", lambda out, ctx: contexts.append(ctx))
     run(data_dir, tmp_path / "site", offline=True, n_sims=200, n_sims_final=400,
         today=date(2025, 6, 1))
@@ -201,3 +202,18 @@ def test_cli_passes_final_sims(data_dir, tmp_path, monkeypatch):
     assert seen["n_sims_final"] == 1234
     main(["run", "--offline"])
     assert seen["n_sims_final"] == 200_000
+
+
+def test_checkpoint_shocks_ignore_later_results(data_dir):
+    from f1pred.data import load_results, load_schedule
+    from f1pred.pipeline import season_checkpoints
+    results = load_results(data_dir / "raw")
+    sched = load_schedule(data_dir / "raw", 2025)
+    base = season_checkpoints(results, sched, 2025, [1, 2, 3], n_sims=100, seed=0)
+    tampered = results.copy()
+    later = (tampered["season"] == 2025) & (tampered["round"] > 3)
+    tampered.loc[later, "position"] = 21 - tampered.loc[later, "position"]
+    tampered.loc[later, "finished"] = False
+    after = season_checkpoints(tampered, sched, 2025, [1, 2, 3], n_sims=100, seed=0)
+    assert [cp.shocks for cp in base] == [cp.shocks for cp in after]
+    assert all(cp.shocks.sigma != cp.sigma for cp in base)  # estimées, pas le repli

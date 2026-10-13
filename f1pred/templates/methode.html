@@ -28,10 +28,14 @@
     lente plusieurs week-ends, un moteur peut casser à répétition. Chaque saison simulée a
     donc sa propre forme par pilote et par écurie, et sa propre fiabilité : certaines
     simulations contiennent des séries d'abandons ou une écurie en difficulté jusqu'à la
-    fin. L'ampleur de ces écarts est mesurée sur les 10 dernières courses et sur les
-    abandons de la saison : forme du pilote ±{{ tau_driver | fr(1) }} place, forme de
-    l'écurie ±{{ tau_team | fr(1) }} place, fiabilité ×e<sup>±{{ dnf_shock | fr(1) }}</sup>
-    (le taux d'abandon de chaque pilote est multiplié ou divisé d'autant).</p>
+    fin. L'ampleur de ces écarts est mesurée en comparant, après chaque manche des saisons
+    {{ shock_seasons }}, les prévisions des {{ shock_horizon }} courses suivantes aux
+    résultats réels{% if decided %}.{% else %} :
+    forme du pilote ±{{ tau_driver | fr(1) }} place,
+    forme de l'écurie ±{{ tau_team | fr(1) }} place,
+    fiabilité ×e<sup>±{{ dnf_shock | fr(1) }}</sup> (le taux d'abandon de chaque pilote est multiplié
+    ou divisé d'autant). L'aléa d'une course à l'autre ({{ sigma | fr(1) }} places) est ce
+    qui reste une fois ces écarts persistants retirés.{% endif %}</p>
 
   <h2>4. Précision mesurée</h2>
   {% if backtest.n_races %}

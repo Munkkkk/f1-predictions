@@ -12,6 +12,8 @@ from f1pred.features import add_future_rows, build_features
 from f1pred.history import load_history, save_history, upsert
 from f1pred.model import DEFAULT_SIGMA, predict, train
 from f1pred.rules import COUNTBACK_DEPTH
+from f1pred.shocks import HORIZON as SHOCK_HORIZON
+from f1pred.shocks import Shocks, estimate_shocks, residual_records, usable_records
 from f1pred.simulate import (
     RaceInput,
     SimResult,
@@ -46,10 +48,18 @@ class Checkpoint:
     state: SeasonState
     sim: SimResult
     races: list[RaceInput]
+    sigma: float  # erreur d'une prévision à une course (backtest)
+    shocks: Shocks  # aléa par course et chocs persistants utilisés par la simulation
+
+
+@dataclass
+class Forecast:
+    """Prévisions des courses restantes, faites avec les données connues après `round`."""
+    round: int
+    state: SeasonState
+    races: list[RaceInput]
     sigma: float
-    tau_driver: float = 0.0
-    tau_team: float = 0.0
-    dnf_shock: float = 0.0
+    preds: pd.DataFrame  # une ligne par (manche future, pilote) : pred_pos, p_dnf
 
 
 @dataclass
@@ -75,9 +85,9 @@ def season_state(results: pd.DataFrame, season: int) -> SeasonState:
     return SeasonState(drivers, names, teams, points, countback, int(cur["round"].max()))
 
 
-def predict_from(results: pd.DataFrame, schedule: pd.DataFrame, season: int, upto_round: int,
-                 n_sims: int, seed: int) -> Checkpoint:
-    """Probabilités de titre avec uniquement les données disponibles après `upto_round`."""
+def forecast(results: pd.DataFrame, schedule: pd.DataFrame, season: int,
+             upto_round: int) -> Forecast:
+    """Entraîne le modèle sur les données connues après `upto_round` et prévoit la suite."""
     past = results[(results["season"] < season)
                    | ((results["season"] == season) & (results["round"] <= upto_round))]
     state = season_state(past, season)
@@ -88,12 +98,11 @@ def predict_from(results: pd.DataFrame, schedule: pd.DataFrame, season: int, upt
 
     races: list[RaceInput] = []
     sigma = DEFAULT_SIGMA
-    shocks = {"tau_driver": 0.0, "tau_team": 0.0, "dnf_shock": 0.0}
+    preds = pd.DataFrame(columns=["season", "round", "driver_id", "pred_pos", "p_dnf"])
     if not future.empty:
         feats = build_features(add_future_rows(past, future, lineup))
         models = train(feats, current_season=season)
         sigma = models.sigma
-        shocks = {k: getattr(models, k) for k in shocks}
         preds = predict(models, feats[feats["position"].isna()])
         for race in future.itertuples():
             p = (preds[preds["round"] == race.round].set_index("driver_id")
@@ -106,11 +115,68 @@ def predict_from(results: pd.DataFrame, schedule: pd.DataFrame, season: int, upt
             if race.has_sprint:
                 races.append(replace(gp_input, is_sprint=True))
             races.append(gp_input)
+    return Forecast(upto_round, state, races, sigma, preds)
 
-    sim = simulate_season(state.drivers, state.points, state.countback, races,
-                          sigma=sigma, n_sims=n_sims, seed=seed,
-                          teams=[state.teams[d] for d in state.drivers], **shocks)
-    return Checkpoint(upto_round, state, sim, races, sigma, **shocks)
+
+def simulate_forecast(fc: Forecast, n_sims: int, seed: int,
+                      shocks: Shocks | None = None) -> Checkpoint:
+    """Simule la fin de saison ; sans `shocks` (ou saison finie), aucun choc."""
+    if shocks is None or not fc.races:
+        shocks = Shocks(sigma=fc.sigma)
+    st = fc.state
+    sim = simulate_season(st.drivers, st.points, st.countback, fc.races, sigma=shocks.sigma,
+                          n_sims=n_sims, seed=seed, teams=[st.teams[d] for d in st.drivers],
+                          tau_driver=shocks.tau_driver, tau_team=shocks.tau_team,
+                          dnf_shock=shocks.dnf_shock)
+    return Checkpoint(fc.round, st, sim, fc.races, fc.sigma, shocks)
+
+
+def predict_from(results: pd.DataFrame, schedule: pd.DataFrame, season: int, upto_round: int,
+                 n_sims: int, seed: int, shocks: Shocks | None = None) -> Checkpoint:
+    """Probabilités de titre avec uniquement les données disponibles après `upto_round`."""
+    return simulate_forecast(forecast(results, schedule, season, upto_round), n_sims, seed,
+                             shocks)
+
+
+def _schedule_from_results(results: pd.DataFrame, season: int) -> pd.DataFrame:
+    """Calendrier d'une saison passée, reconstitué à partir de ses résultats."""
+    cur = results[results["season"] == season]
+    sprint_rounds = set(cur.loc[cur["is_sprint"].astype(bool), "round"])
+    gp = cur[~cur["is_sprint"].astype(bool)].drop_duplicates("round").sort_values("round")
+    return gp[["season", "round", "race_name", "date", "circuit_id"]].assign(
+        has_sprint=gp["round"].isin(sprint_rounds).to_numpy())
+
+
+def _season_records(results: pd.DataFrame, season: int) -> list[pd.DataFrame]:
+    """Erreurs de prévision multi-courses d'une saison passée (un checkpoint par manche)."""
+    if not (results["season"] == season).any():
+        return []
+    schedule = _schedule_from_results(results, season)
+    rounds = schedule["round"].tolist()
+    return [residual_records(forecast(results, schedule, season, rnd).preds, results, season,
+                             rnd) for rnd in rounds[:-1]]
+
+
+def season_checkpoints(results: pd.DataFrame, schedule: pd.DataFrame, season: int,
+                       rounds: list[int], n_sims: int, seed: int,
+                       n_sims_final: int | None = None) -> list[Checkpoint]:
+    """Un checkpoint par manche ; les chocs de la manche r n'utilisent que les courses <= r.
+
+    Les erreurs de prévision viennent de la saison précédente et des checkpoints déjà calculés
+    de la saison en cours. La dernière manche utilise `n_sims_final` simulations.
+    """
+    records = _season_records(results, season - 1)
+    checkpoints = []
+    for rnd in rounds:
+        fc = forecast(results, schedule, season, rnd)
+        shocks = None
+        if records:
+            pool = usable_records(pd.concat(records, ignore_index=True), season, rnd)
+            shocks = estimate_shocks(pool, fallback_sigma=fc.sigma)
+        sims = n_sims_final if rnd == rounds[-1] and n_sims_final else n_sims
+        checkpoints.append(simulate_forecast(fc, sims, seed, shocks))
+        records.append(residual_records(fc.preds, results, season, rnd))
+    return checkpoints
 
 
 def validate(cp: Checkpoint) -> None:
@@ -186,11 +252,13 @@ def _context(final: Checkpoint, season: int, history: list[dict], metrics: dict,
         "champion": drivers[0]["name"] if final.sim.decided else None,
         "drivers": drivers,
         "history": [e for e in history if e["season"] == season],
-        "names": st.names, "backtest": metrics, "sigma": final.sigma, "n_sims": n_sims,
+        "names": st.names, "backtest": metrics, "sigma": final.shocks.sigma,
+        "n_sims": n_sims,
         "train_seasons": f"{first_season}–{season}",
         "remaining_points": remaining, "remaining_gp": len(final.races) - n_sprints,
-        "remaining_sprints": n_sprints, "tau_driver": final.tau_driver,
-        "tau_team": final.tau_team, "dnf_shock": final.dnf_shock,
+        "remaining_sprints": n_sprints, "tau_driver": final.shocks.tau_driver,
+        "tau_team": final.shocks.tau_team, "dnf_shock": final.shocks.dnf_shock,
+        "shock_horizon": SHOCK_HORIZON, "shock_seasons": f"{season - 1}–{season}",
     }
 
 
@@ -217,12 +285,10 @@ def run(data_dir: Path, out_dir: Path, offline: bool, seed: int = 0, n_sims: int
     if not force and any(e["season"] == season and e["round"] == last for e in history):
         return Outcome(False, f"Aucune nouvelle manche : saison {season}, manche {last}.")
 
-    checkpoints = []
-    for rnd in rounds:
-        cp = predict_from(results, schedule, season, rnd,
-                          n_sims_final if rnd == last else n_sims, seed)
+    checkpoints = season_checkpoints(results, schedule, season, rounds, n_sims, seed,
+                                     n_sims_final)
+    for cp in checkpoints:
         validate(cp)
-        checkpoints.append(cp)
         history = upsert(history, _history_entry(cp, season, schedule))
     metrics = backtest_metrics(checkpoints, results, season, n_sims, seed)
 

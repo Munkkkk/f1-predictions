@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 
 from f1pred.features import build_features
-from f1pred.model import HOLDOUT_RACES, predict, sample_weights, train
+from f1pred.model import predict, sample_weights, train
 from tests.helpers import make_results
 
 
@@ -40,29 +40,3 @@ def test_no_dnf_observed_uses_constant_rate():
     preds = predict(models, feats.tail(5))
     assert np.allclose(preds["p_dnf"], models.dnf_base)
 
-
-def test_shocks_are_finite_and_non_negative():
-    models = train(build_features(make_results(seasons=(2023, 2024, 2025))), current_season=2025)
-    shocks = [models.tau_driver, models.tau_team, models.dnf_shock]
-    assert np.isfinite(shocks).all()
-    assert min(shocks) >= 0.0
-    assert models.dnf_shock <= 1.0
-
-
-def test_shocks_are_zero_without_holdout():
-    models = train(build_features(make_results(seasons=(2024, 2025))), current_season=2025)
-    assert (models.tau_driver, models.tau_team, models.dnf_shock) == (0.0, 0.0, 0.0)
-
-
-def test_driver_persistently_worse_in_holdout_gives_driver_shock():
-    results = make_results(seasons=(2023, 2024, 2025))
-    gp = results[~results["is_sprint"]]
-    last_races = gp[["season", "round"]].drop_duplicates().tail(HOLDOUT_RACES)
-    in_holdout = results.set_index(["season", "round"]).index.isin(
-        list(last_races.itertuples(index=False, name=None)))
-    slumping = in_holdout & (results["driver_id"] == "d0").to_numpy()
-    base = train(build_features(results), current_season=2025)
-    results.loc[slumping, "position"] += 6
-    slump = train(build_features(results), current_season=2025)
-    assert slump.tau_driver > 0.5
-    assert slump.tau_driver > base.tau_driver
