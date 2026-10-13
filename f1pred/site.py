@@ -14,8 +14,34 @@ SERIES = ["#2a78d6", "#0e8f6a", "#7c6ad8", "#b07a00", "#c0508a"]
 TOP_N_BARS = 10
 TOP_N_LINES = 6
 
+CHART_CONFIG = {"displayModeBar": False}
+
+
+def format_pct(p: float, decided: bool) -> str:
+    """Pourcentage à la française ; évite d'afficher 100 % / 0 % tant que le titre est ouvert."""
+    if decided:
+        v = p * 100
+        return f"{round(v)} %" if abs(v - round(v)) < 1e-9 else f"{v:.1f}".replace(".", ",") + " %"
+    if p >= 0.9995:
+        return "> 99,9 %"
+    if p < 0.0005:
+        return "< 0,1 %"
+    return f"{p * 100:.1f}".replace(".", ",") + " %"
+
+
+def _fr(value: float, digits: int) -> str:
+    return f"{value:.{digits}f}".replace(".", ",")
+
+
+def _int_fr(n: int) -> str:
+    return f"{int(n):,}".replace(",", " ")
+
+
 _env = Environment(loader=PackageLoader("f1pred", "templates"),
                    autoescape=select_autoescape(["html"]))
+_env.filters["pct"] = format_pct
+_env.filters["fr"] = _fr
+_env.filters["int_fr"] = _int_fr
 
 
 def _layout(fig: go.Figure, height: int) -> go.Figure:
@@ -28,17 +54,19 @@ def _layout(fig: go.Figure, height: int) -> go.Figure:
     return fig
 
 
-def _bars(drivers: list[dict]) -> str:
+def _bars(drivers: list[dict], decided: bool) -> str:
     top = drivers[:TOP_N_BARS][::-1]
     fig = go.Figure(go.Bar(
         x=[d["p_title"] * 100 for d in top], y=[d["name"] for d in top], orientation="h",
         marker_color=[ACCENT if i == len(top) - 1 else MUTED for i in range(len(top))],
-        text=[f"{d['p_title'] * 100:.1f} %" for d in top], textposition="outside",
-        hovertemplate="%{y} : %{x:.1f} %<extra></extra>",
+        text=[format_pct(d["p_title"], decided) for d in top], textposition="auto",
+        cliponaxis=False,
+        hovertemplate="%{y} : %{text}<extra></extra>",
     ))
-    fig.update_xaxes(range=[0, 115], showgrid=False, visible=False)
-    fig.update_yaxes(showgrid=False)
-    return _layout(fig, 40 * len(top) + 40).to_html(full_html=False, include_plotlyjs=False)
+    fig.update_xaxes(range=[0, 108], showgrid=False, visible=False)
+    fig.update_yaxes(showgrid=False, automargin=True)
+    return _layout(fig, 40 * len(top) + 40).to_html(
+        full_html=False, include_plotlyjs=False, config=CHART_CONFIG)
 
 
 def _line_colors(drivers: list[dict]) -> dict[str, str]:
@@ -65,13 +93,13 @@ def _lines(history: list[dict], names: dict[str, str], drivers: list[dict]) -> s
     fig.update_xaxes(showgrid=False)
     fig = _layout(fig, 380)
     fig.update_layout(showlegend=True, legend=dict(orientation="h", y=-0.2), hovermode="x unified")
-    return fig.to_html(full_html=False, include_plotlyjs=False)
+    return fig.to_html(full_html=False, include_plotlyjs=False, config=CHART_CONFIG)
 
 
 def render_site(out_dir: Path, context: dict) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     charts = {
-        "bars_html": _bars(context["drivers"]),
+        "bars_html": _bars(context["drivers"], context["decided"]),
         "lines_html": _lines(context["history"], context["names"], context["drivers"]),
     }
     for page in ("index.html", "methode.html"):

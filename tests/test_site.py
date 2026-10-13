@@ -1,4 +1,4 @@
-from f1pred.site import render_site
+from f1pred.site import format_pct, render_site
 
 
 def context(decided=False):
@@ -62,3 +62,22 @@ def test_line_colors_follow_driver_not_rank():
     b = _line_colors([drv("x"), drv("d"), drv("b"), drv("c")])
     assert a == b
     assert len(set(a.values())) == len(a)
+
+
+def test_format_pct_cases():
+    assert format_pct(1.0, decided=False) == "> 99,9 %"
+    assert format_pct(0.0, decided=False) == "< 0,1 %"
+    assert format_pct(0.123, decided=False) == "12,3 %"
+    assert format_pct(1.0, decided=True) == "100 %"
+    assert format_pct(0.0, decided=True) == "0 %"
+
+
+def test_undecided_certain_title_never_shows_100(tmp_path):
+    ctx = context(decided=False)
+    ctx["drivers"][0]["p_title"] = 1.0
+    ctx["drivers"][1]["p_title"] = 0.0
+    render_site(tmp_path, ctx)
+    index = (tmp_path / "index.html").read_text(encoding="utf-8")
+    assert "&gt; 99,9 %" in index or "> 99,9 %" in index
+    table = index.split("<tbody>")[1].split("</tbody>")[0]
+    assert "100" not in table and "99,9" in table and "0,1" in table

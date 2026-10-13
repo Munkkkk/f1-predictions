@@ -6,7 +6,7 @@
   <p class="sub">Comment les probabilités sont calculées, et à quel point s'y fier.</p>
 
   <h2>1. Un modèle par course</h2>
-  <p>Deux modèles LightGBM sont entraînés sur toutes les courses depuis {{ train_seasons }} :
+  <p>Deux modèles LightGBM sont entraînés sur toutes les courses des saisons {{ train_seasons }} :
     l'un prédit la position d'arrivée, l'autre la probabilité d'abandon. Ils n'utilisent que des
     informations connues avant la course : forme récente du pilote (3 et 5 dernières courses),
     forme de l'écurie, historique sur le circuit, écart avec le coéquipier, taux d'abandon récent
@@ -20,9 +20,9 @@
 
   <h2>3. Simuler la fin de saison</h2>
   <p>Pour chaque course restante, on part de la position prédite de chaque pilote, on ajoute un
-    aléa (écart-type de {{ "%.1f"|format(sigma) }} places, mesuré sur les erreurs passées du
+    aléa (écart-type de {{ sigma | fr(1) }} places, mesuré sur les erreurs passées du
     modèle), on tire au sort les abandons, puis on attribue les points du barème officiel. On
-    répète {{ n_sims }} fois. La probabilité de titre est la part des simulations où le pilote
+    répète {{ n_sims | int_fr }} fois. La probabilité de titre est la part des simulations où le pilote
     finit en tête, avec le départage officiel (nombre de victoires, puis de 2es places…).</p>
 
   <h2>4. Précision mesurée</h2>
@@ -34,10 +34,10 @@
   <table>
     <thead><tr><th>Prédiction</th><th class="num">Modèle</th><th class="num">Référence</th></tr></thead>
     <tbody>
-      <tr><td>Vainqueur de la course</td><td class="num">{{ "%.3f"|format(backtest.brier_winner) }}</td>
-        <td class="num">{{ "%.3f"|format(backtest.brier_winner_baseline) }}</td></tr>
-      <tr><td>Podium</td><td class="num">{{ "%.3f"|format(backtest.brier_podium) }}</td>
-        <td class="num">{{ "%.3f"|format(backtest.brier_podium_baseline) }}</td></tr>
+      <tr><td>Vainqueur de la course</td><td class="num">{{ backtest.brier_winner | fr(3) }}</td>
+        <td class="num">{{ backtest.brier_winner_baseline | fr(3) }}</td></tr>
+      <tr><td>Podium</td><td class="num">{{ backtest.brier_podium | fr(3) }}</td>
+        <td class="num">{{ backtest.brier_podium_baseline | fr(3) }}</td></tr>
     </tbody>
   </table>
   {% else %}

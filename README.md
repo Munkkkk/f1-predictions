@@ -21,4 +21,16 @@ uv run pytest
   `data/`, puis déploie `site/` sur GitHub Pages.
 - `.github/workflows/test.yml` : ruff + pytest à chaque push.
 
+## Si le déploiement a échoué
+
+Il faut une fois activer GitHub Pages : Settings → Pages → Source = « GitHub Actions ».
+
+Si le déploiement échoue après le commit des données, le prochain lancement planifié ne fait
+rien : la manche figure déjà dans `data/history.json`. Pour forcer un nouveau calcul et un
+nouveau déploiement, relancer le workflow `update` à la main avec `force` coché :
+
+```bash
+gh workflow run update -f force=true
+```
+
 Données : [Jolpica F1 API](https://github.com/jolpica/jolpica-f1). Projet non officiel.

@@ -35,6 +35,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add data
           git diff --cached --quiet || git commit -m "data: mise à jour après la dernière manche"
+          git pull --rebase origin ${{ github.ref_name }}
           git push
       - if: steps.run.outputs.updated == 'true'
         uses: actions/configure-pages@v5

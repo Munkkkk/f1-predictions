@@ -5,7 +5,7 @@
   <div class="banner">🏆 {{ champion }} est Champion du monde {{ season }}.</div>
   {% endif %}
   <h1>Qui sera champion du monde {{ season }} ?</h1>
-  <p class="sub">Probabilité de titre pilotes, d'après {{ "{:,}".format(n_sims).replace(",", " ") }}
+  <p class="sub">Probabilité de titre pilotes, d'après {{ n_sims | int_fr }}
     simulations de la fin de saison.</p>
 
   <div class="card">{{ bars_html | safe }}</div>
@@ -21,7 +21,7 @@
     {% for d in drivers %}
       <tr><td>{{ d.name }}</td><td class="num">{{ d.points }}</td>
         <td class="num">{{ "%.0f"|format(d.expected_points) }}</td>
-        <td class="num">{{ "%.1f"|format(d.p_title * 100) }} %</td></tr>
+        <td class="num">{{ d.p_title | pct(decided) }}</td></tr>
     {% endfor %}
     </tbody>
   </table>
