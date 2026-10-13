@@ -161,6 +161,7 @@ def test_context_reports_remaining_points_and_eliminations(data_dir):
     for d in ctx["drivers"]:
         assert d["max_points"] == d["points"] + ctx["remaining_points"]
         assert d["eliminated"] == (d["max_points"] < leader)
+    assert any(d["eliminated"] for d in ctx["drivers"])
     assert {"tau_driver", "tau_team", "dnf_shock"} <= ctx.keys()
     assert ctx["tau_driver"] == cp.shocks.tau_driver
     assert ctx["sigma"] == cp.shocks.sigma
@@ -237,3 +238,25 @@ def test_context_sorts_drivers_like_the_standings(data_dir):
     assert order[:2] == [b, a]  # points d'abord, puis probabilité de titre
     points = [d["points"] for d in ctx["drivers"]]
     assert points == sorted(points, reverse=True)
+
+
+def test_predict_from_forwards_teams_and_shocks(data_dir, monkeypatch):
+    import f1pred.pipeline as pl
+    from f1pred.data import load_results, load_schedule
+    from f1pred.shocks import Shocks
+    seen = {}
+    real = pl.simulate_season
+
+    def spy(*args, **kwargs):
+        seen.update(kwargs)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(pl, "simulate_season", spy)
+    results = load_results(data_dir / "raw")
+    shocks = Shocks(sigma=2.5, tau_driver=1.1, tau_team=1.2, dnf_shock=0.3)
+    cp = predict_from(results, load_schedule(data_dir / "raw", 2025), 2025, 5, n_sims=100,
+                      seed=0, shocks=shocks)
+    assert seen["teams"] == [cp.state.teams[d] for d in cp.state.drivers]
+    assert (seen["sigma"], seen["tau_driver"], seen["tau_team"], seen["dnf_shock"]) == (
+        2.5, 1.1, 1.2, 0.3)
+    assert cp.shocks == shocks

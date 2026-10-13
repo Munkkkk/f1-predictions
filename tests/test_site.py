@@ -118,7 +118,8 @@ def test_eliminated_driver_and_max_points_column(tmp_path):
 def test_methode_explains_persistent_shocks(tmp_path):
     render_site(tmp_path, context())
     methode = (tmp_path / "methode.html").read_text(encoding="utf-8")
-    assert "±1,8 place" in methode and "±1,2 place" in methode and "0,6" in methode
+    assert "±1,8 place" in methode and "±1,2 place" in methode
+    assert "×e<sup>±0,6</sup>" in methode
     assert "abandons" in methode
 
 
