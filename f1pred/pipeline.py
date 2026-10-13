@@ -241,7 +241,7 @@ def _context(final: Checkpoint, season: int, history: list[dict], metrics: dict,
           "points": int(st.points[i]), "max_points": int(st.points[i]) + remaining,
           "eliminated": not bool(alive[i]), "p_title": final.sim.p_title[d],
           "expected_points": final.sim.expected_points[d]} for i, d in enumerate(st.drivers)),
-        key=lambda x: (-x["p_title"], -x["points"]),
+        key=lambda x: (-x["points"], -x["p_title"]),  # ordre du classement officiel
     )
     n_sprints = sum(r.is_sprint for r in final.races)
     last = schedule.loc[schedule["round"] == final.round, "race_name"]
@@ -249,7 +249,8 @@ def _context(final: Checkpoint, season: int, history: list[dict], metrics: dict,
         "season": season, "updated_at": today.isoformat(),
         "last_race": str(last.iloc[0]) if not last.empty else f"manche {final.round}",
         "decided": final.sim.decided,
-        "champion": drivers[0]["name"] if final.sim.decided else None,
+        "champion": (max(drivers, key=lambda x: x["p_title"])["name"]
+                     if final.sim.decided else None),
         "drivers": drivers,
         "history": [e for e in history if e["season"] == season],
         "names": st.names, "backtest": metrics, "sigma": final.shocks.sigma,

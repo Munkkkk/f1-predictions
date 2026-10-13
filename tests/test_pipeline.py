@@ -217,3 +217,23 @@ def test_checkpoint_shocks_ignore_later_results(data_dir):
     after = season_checkpoints(tampered, sched, 2025, [1, 2, 3], n_sims=100, seed=0)
     assert [cp.shocks for cp in base] == [cp.shocks for cp in after]
     assert all(cp.shocks.sigma != cp.sigma for cp in base)  # estimées, pas le repli
+
+
+def test_context_sorts_drivers_like_the_standings(data_dir):
+    from f1pred.data import load_results, load_schedule
+    from f1pred.pipeline import _context
+    results = load_results(data_dir / "raw")
+    sched = load_schedule(data_dir / "raw", 2025)
+    cp = predict_from(results, sched, 2025, 5, n_sims=300, seed=0)
+    i, j = 0, 1
+    points = np.full(len(cp.state.drivers), 50)
+    points[j] = 80  # meneur aux points, mais moins de chances de titre
+    cp.state.points = points
+    a, b = cp.state.drivers[i], cp.state.drivers[j]
+    cp.sim.p_title.update({d: 0.0 for d in cp.sim.p_title})
+    cp.sim.p_title.update({a: 0.7, b: 0.3})
+    ctx = _context(cp, 2025, [], {}, sched, 300, date(2025, 6, 1), 2023)
+    order = [d["driver_id"] for d in ctx["drivers"]]
+    assert order[:2] == [b, a]  # points d'abord, puis probabilité de titre
+    points = [d["points"] for d in ctx["drivers"]]
+    assert points == sorted(points, reverse=True)

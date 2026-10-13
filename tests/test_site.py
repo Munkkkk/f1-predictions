@@ -130,3 +130,24 @@ def test_methode_describes_shock_window_and_hides_values_once_decided(tmp_path):
     render_site(tmp_path, context(decided=True))
     methode = (tmp_path / "methode.html").read_text(encoding="utf-8")
     assert "±1,8" not in methode and "±0,0" not in methode
+
+
+def test_bars_and_lines_highlight_first_driver_in_points_order():
+    from f1pred.site import ACCENT, MUTED, _bars, _line_colors
+    drivers = [
+        {"driver_id": "russell", "name": "George Russell", "points": 250, "p_title": 0.3},
+        {"driver_id": "antonelli", "name": "Andrea Kimi Antonelli", "points": 240,
+         "p_title": 0.7},
+    ]
+    html = _bars(drivers, decided=False)  # barres de bas en haut : le meneur en dernier
+    assert '"y":["Andrea Kimi Antonelli","George Russell"]' in html
+    assert f'"color":["{MUTED}","{ACCENT}"]' in html
+    assert _line_colors(drivers)["russell"] == ACCENT
+
+
+def test_table_follows_context_order(tmp_path):
+    ctx = context()
+    ctx["drivers"].reverse()
+    render_site(tmp_path, ctx)
+    table = (tmp_path / "index.html").read_text(encoding="utf-8").split("<tbody>")[1]
+    assert table.index("George Russell") < table.index("Andrea Kimi Antonelli")
