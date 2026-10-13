@@ -30,9 +30,22 @@ def add_future_rows(results: pd.DataFrame, schedule: pd.DataFrame, lineup: pd.Da
 
 
 def _past_rolling(df: pd.DataFrame, by, col: str, window: int) -> pd.Series:
-    return df.groupby(by)[col].transform(
-        lambda s: s.shift(1).rolling(window, min_periods=1).mean()
-    )
+    """Moyenne glissante des `window` manches précédentes.
+
+    Les manches futures (position inconnue) reçoivent toutes la valeur connue après la dernière
+    manche courue : la moyenne des `window` dernières valeurs connues. Sans cela, la fenêtre
+    d'une course lointaine ne contiendrait que des manches futures et retomberait sur le
+    neutre. Les manches passées ne changent pas.
+    """
+    future = df["position"].isna()
+
+    def roll(s: pd.Series) -> pd.Series:
+        past = s.shift(1).rolling(window, min_periods=1).mean()
+        known = s[~future.loc[s.index]].dropna()
+        as_of = known.rolling(window, min_periods=1).mean().reindex(s.index).ffill()
+        return past.where(~future.loc[s.index], as_of)
+
+    return df.groupby(by)[col].transform(roll)
 
 
 def build_features(results: pd.DataFrame) -> pd.DataFrame:

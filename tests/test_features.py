@@ -80,3 +80,49 @@ def test_add_future_rows_is_noop_without_schedule_or_lineup():
     empty_sched = make_schedule(2025, 3).iloc[0:0]
     assert add_future_rows(results, empty_sched, results.iloc[:0]) is results
     assert add_future_rows(results, make_schedule(2025, 3), results.iloc[0:0]) is results
+
+
+def _with_future(positions, n_future=6, finished=None):
+    rows = []
+    finished = finished or [True] * len(positions)
+    for rnd, (pos, fin) in enumerate(zip(positions, finished, strict=True), start=1):
+        for drv, p in (("a", pos), ("b", pos + 1)):
+            rows.append(dict(season=2026, round=rnd, race_name="GP", date=f"2026-01-{rnd:02d}",
+                             circuit_id=f"c{rnd}", driver_id=drv, driver_name=drv.upper(),
+                             constructor_id="t", position=p, points=0.0,
+                             finished=fin if drv == "a" else True, is_sprint=False))
+    known = pd.DataFrame(rows)
+    n = len(positions)
+    sched = make_schedule(2026, n + n_future).query(f"round > {n}")
+    lineup = known.drop_duplicates("driver_id")[["driver_id", "driver_name", "constructor_id"]]
+    feats = build_features(add_future_rows(known, sched, lineup))
+    return feats[(feats["driver_id"] == "a") & (feats["round"] > n)]
+
+
+def test_future_rows_keep_recent_form_far_ahead():
+    future = _with_future([7, 1, 1, 1])
+    assert len(future) == 6
+    assert future["drv_form3"].tolist() == pytest.approx([1.0] * 6)
+
+
+def test_future_rows_use_form_as_of_last_known_race():
+    future = _with_future([1, 9, 5, 3, 2, 4], finished=[True, False, True, True, True, True])
+    assert future["drv_form3"].tolist() == pytest.approx([3.0] * 6)          # 3, 2, 4
+    assert future["drv_form5"].tolist() == pytest.approx([23 / 5] * 6)       # 9, 5, 3, 2, 4
+    assert future["team_form5"].tolist() == pytest.approx([23 / 5 + 0.5] * 6)
+    assert future["teammate_delta"].tolist() == pytest.approx([-1.0] * 6)
+    assert future["dnf_rate10"].tolist() == pytest.approx([1 / 6] * 6)
+
+
+def test_past_solo_rows_keep_teammate_delta_rule():
+    # Un pilote seul dans son écurie (delta inconnu) : rien n'est reporté sur les manches passées.
+    rows = []
+    for rnd in range(1, 5):
+        rows.append(dict(season=2026, round=rnd, race_name="GP", date=f"2026-01-0{rnd}",
+                         circuit_id="c", driver_id="a", driver_name="A", constructor_id="t",
+                         position=1, points=0.0, finished=True, is_sprint=False))
+        if rnd <= 2:
+            rows.append(dict(rows[-1], driver_id="b", driver_name="B", position=3))
+    feats = build_features(pd.DataFrame(rows))
+    a = feats[feats["driver_id"] == "a"].set_index("round")["teammate_delta"]
+    assert a.tolist() == pytest.approx([0.0, -2.0, -2.0, -2.0])
