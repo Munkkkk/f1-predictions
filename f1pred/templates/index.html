@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block nav_index %}active{% endblock %}
+{% block content %}
+  {% if decided %}
+  <div class="banner">🏆 {{ champion }} est Champion du monde {{ season }}.</div>
+  {% endif %}
+  <h1>Qui sera champion du monde {{ season }} ?</h1>
+  <p class="sub">Probabilité de titre pilotes, d'après {{ "{:,}".format(n_sims).replace(",", " ") }}
+    simulations de la fin de saison.</p>
+
+  <div class="card">{{ bars_html | safe }}</div>
+
+  <h2>Évolution au fil de la saison</h2>
+  <div class="card">{{ lines_html | safe }}</div>
+
+  <h2>Détail</h2>
+  <table>
+    <thead><tr><th>Pilote</th><th class="num">Points</th>
+      <th class="num">Points attendus</th><th class="num">Titre</th></tr></thead>
+    <tbody>
+    {% for d in drivers %}
+      <tr><td>{{ d.name }}</td><td class="num">{{ d.points }}</td>
+        <td class="num">{{ "%.0f"|format(d.expected_points) }}</td>
+        <td class="num">{{ "%.1f"|format(d.p_title * 100) }} %</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+{% endblock %}

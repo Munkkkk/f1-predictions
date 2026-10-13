@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Méthode · Prédictions F1 {{ season }}{% endblock %}
+{% block nav_methode %}active{% endblock %}
+{% block content %}
+  <h1>Méthode</h1>
+  <p class="sub">Comment les probabilités sont calculées, et à quel point s'y fier.</p>
+
+  <h2>1. Un modèle par course</h2>
+  <p>Deux modèles LightGBM sont entraînés sur toutes les courses depuis {{ train_seasons }} :
+    l'un prédit la position d'arrivée, l'autre la probabilité d'abandon. Ils n'utilisent que des
+    informations connues avant la course : forme récente du pilote (3 et 5 dernières courses),
+    forme de l'écurie, historique sur le circuit, écart avec le coéquipier, taux d'abandon récent
+    et part des points de la saison. La position sur la grille n'est pas utilisée, car elle est
+    inconnue pour les courses futures.</p>
+
+  <h2>2. Le règlement 2026 change la donne</h2>
+  <p>Nouveaux moteurs, nouvelles voitures : l'historique d'avant 2026 prédit mal la hiérarchie
+    actuelle. Les courses de la saison en cours pèsent donc 5 fois plus à l'entraînement, et les
+    saisons anciennes de moins en moins.</p>
+
+  <h2>3. Simuler la fin de saison</h2>
+  <p>Pour chaque course restante, on part de la position prédite de chaque pilote, on ajoute un
+    aléa (écart-type de {{ "%.1f"|format(sigma) }} places, mesuré sur les erreurs passées du
+    modèle), on tire au sort les abandons, puis on attribue les points du barème officiel. On
+    répète {{ n_sims }} fois. La probabilité de titre est la part des simulations où le pilote
+    finit en tête, avec le départage officiel (nombre de victoires, puis de 2es places…).</p>
+
+  <h2>4. Précision mesurée</h2>
+  <p>Après chacune des {{ backtest.n_races }} dernières courses de la saison, on a refait la
+    prédiction de la course suivante avec uniquement les données disponibles à ce moment-là.
+    Score de Brier : plus il est bas, mieux c'est ; la référence donne la même chance à tout
+    le monde.</p>
+  <table>
+    <thead><tr><th>Prédiction</th><th class="num">Modèle</th><th class="num">Référence</th></tr></thead>
+    <tbody>
+      <tr><td>Vainqueur de la course</td><td class="num">{{ "%.3f"|format(backtest.brier_winner) }}</td>
+        <td class="num">{{ "%.3f"|format(backtest.brier_winner_baseline) }}</td></tr>
+      <tr><td>Podium</td><td class="num">{{ "%.3f"|format(backtest.brier_podium) }}</td>
+        <td class="num">{{ "%.3f"|format(backtest.brier_podium_baseline) }}</td></tr>
+    </tbody>
+  </table>
+
+  <h2>5. Limites</h2>
+  <p>Le modèle ignore les qualifications, la météo, les pénalités moteur et les évolutions
+    techniques en cours de saison. Il suppose des courses disputées sur toute la distance.
+    Les probabilités décrivent une incertitude, pas une certitude.</p>
+{% endblock %}
