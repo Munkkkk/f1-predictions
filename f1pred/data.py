@@ -2,6 +2,7 @@
 
 import time
 from collections.abc import Iterable
+from datetime import date, timedelta
 from pathlib import Path
 
 import numpy as np
@@ -128,14 +129,20 @@ def parse_schedule(payload: dict) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=SCHEDULE_COLUMNS)
 
 
-def drop_incomplete_rounds(results: pd.DataFrame,
-                           schedule: pd.DataFrame | None = None) -> pd.DataFrame:
+GRACE_DAYS = 2  # course le dimanche : le lundi reste strict, le mardi publie quand même
+
+
+def drop_incomplete_rounds(results: pd.DataFrame, schedule: pd.DataFrame | None = None,
+                           today: date | None = None) -> pd.DataFrame:
     """Ignore toute manche dont le GP ne semble pas encore entièrement publié.
 
     Chaque GP doit avoir au moins MIN_RESULTS lignes. La dernière manche de chaque saison,
     la seule qui peut être en cours de publication, doit en plus avoir au moins autant de
     lignes que le GP complet précédent et, si le calendrier en fait un week-end sprint,
     ses lignes de sprint. Les manches plus anciennes plus courtes (forfait réel) restent.
+    Si `today` est donné, la dernière manche est aussi acceptée (avec MIN_RESULTS lignes)
+    dès que sa course date d'au moins GRACE_DAYS jours : plateau réduit, sprint annulé ou
+    dernière manche de la saison ne bloquent pas indéfiniment.
     """
     # astype(bool) : après concat avec un sprint vide, la colonne est en object et ~ casse.
     is_sprint = results["is_sprint"].astype(bool)
@@ -155,13 +162,20 @@ def drop_incomplete_rounds(results: pd.DataFrame,
         latest = keys[-1]
         reference = int(counts.iloc[-2]) if len(counts) > 1 else MIN_RESULTS
         has_sprint = sprint_counts.get(latest, 0) >= MIN_RESULTS
-        if counts.iloc[-1] >= reference and (latest not in sprint_weekends or has_sprint):
+        settled = False
+        if today is not None:
+            raced = results.loc[(results["season"] == latest[0])
+                                & (results["round"] == latest[1]), "date"]
+            settled = pd.Timestamp(raced.max()).date() <= today - timedelta(days=GRACE_DAYS)
+        full = counts.iloc[-1] >= reference and (latest not in sprint_weekends or has_sprint)
+        if full or settled:
             complete.add(latest)
     keep = [(s, r) in complete for s, r in zip(results["season"], results["round"], strict=True)]
     return results[np.array(keep, dtype=bool)].reset_index(drop=True)
 
 
-def fetch_season(client: JolpicaClient, season: int) -> tuple[pd.DataFrame, pd.DataFrame]:
+def fetch_season(client: JolpicaClient, season: int,
+                 today: date | None = None) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Résultats (GP + sprints) et calendrier d'une saison ; FetchError si incomplets."""
     frames = []
     for path, sprint in ((f"{season}/results", False), (f"{season}/sprint", True)):
@@ -173,7 +187,7 @@ def fetch_season(client: JolpicaClient, season: int) -> tuple[pd.DataFrame, pd.D
     schedule = pd.concat([parse_schedule(p) for p in pages], ignore_index=True)
     _check_count(f"{season}/races", pages, len(schedule))
     results = pd.concat(frames, ignore_index=True)
-    return drop_incomplete_rounds(results, schedule), schedule
+    return drop_incomplete_rounds(results, schedule, today or date.today()), schedule
 
 
 def _season_complete(raw_dir: Path, season: int) -> bool:
@@ -192,14 +206,15 @@ def _sessions(df: pd.DataFrame) -> set[tuple[int, bool]]:
 
 
 def update_cache(
-    raw_dir: Path, seasons: Iterable[int], current_season: int, client: JolpicaClient
+    raw_dir: Path, seasons: Iterable[int], current_season: int, client: JolpicaClient,
+    today: date | None = None,
 ) -> None:
     raw_dir.mkdir(parents=True, exist_ok=True)
     for season in seasons:
         results_path = raw_dir / f"results_{season}.parquet"
         if season != current_season and _season_complete(raw_dir, season):
             continue
-        results, schedule = fetch_season(client, season)
+        results, schedule = fetch_season(client, season, today)
         if results_path.exists():
             cached = pd.read_parquet(results_path, columns=["round", "is_sprint"])
             missing = sorted(_sessions(cached) - _sessions(results))

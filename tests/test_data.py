@@ -1,4 +1,5 @@
 import json
+from datetime import date
 from pathlib import Path
 
 import pandas as pd
@@ -283,6 +284,31 @@ def test_latest_sprint_weekend_needs_sprint_rows():
     df = pd.DataFrame(_rows(2026, 1, 22, False) + _rows(2026, 2, 22, True)
                       + _rows(2026, 2, 22, False))
     assert set(drop_incomplete_rounds(df, sched)["round"]) == {1, 2}
+
+
+def _dated(rows, day):
+    return [dict(r, date=day) for r in rows]
+
+
+def test_short_final_round_is_kept_once_two_days_old():
+    # Repro I1 : une dernière manche à 21 lignes (après 22) n'était jamais publiée.
+    df = pd.DataFrame(_rows(2025, 1, 22, False) + _dated(_rows(2025, 2, 21, False), "2025-12-07"))
+    assert set(drop_incomplete_rounds(df, today=date(2025, 12, 9))["round"]) == {1, 2}
+
+
+def test_missing_sprint_is_kept_once_two_days_old():
+    sched = pd.DataFrame([dict(season=2026, round=r, race_name="GP", date="2026-05-03",
+                               circuit_id="c", has_sprint=r == 2) for r in (1, 2)])
+    df = pd.DataFrame(_rows(2026, 1, 22, False) + _dated(_rows(2026, 2, 22, False), "2026-05-03"))
+    assert set(drop_incomplete_rounds(df, sched, today=date(2026, 5, 5))["round"]) == {1, 2}
+
+
+def test_recent_short_round_is_still_held():
+    # Le lundi (J+1) reste strict ; seul le mardi (J+2) publie une manche courte.
+    df = pd.DataFrame(_rows(2025, 1, 22, False) + _dated(_rows(2025, 2, 21, False), "2025-12-07"))
+    assert set(drop_incomplete_rounds(df, today=date(2025, 12, 8))["round"]) == {1}
+    df = pd.DataFrame(_rows(2025, 1, 22, False) + _dated(_rows(2025, 2, 14, False), "2025-12-01"))
+    assert set(drop_incomplete_rounds(df, today=date(2025, 12, 9))["round"]) == {1}
 
 
 def test_client_refuses_redirects():

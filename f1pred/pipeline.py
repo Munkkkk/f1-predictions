@@ -329,7 +329,7 @@ def run(data_dir: Path, out_dir: Path, offline: bool, seed: int = 0, n_sims: int
     raw = data_dir / "raw"
     if not offline:
         update_cache(raw, range(FIRST_SEASON, today.year + 1), today.year,
-                     client or JolpicaClient())
+                     client or JolpicaClient(), today)
     results = load_results(raw)
     season = today.year if (results["season"] == today.year).any() else today.year - 1
     schedule = load_schedule(raw, season)
