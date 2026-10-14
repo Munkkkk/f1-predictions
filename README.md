@@ -17,17 +17,22 @@ uv run pytest
 
 ## Automatisation
 
-- `.github/workflows/update.yml` : lundi et mardi 8 h UTC (et à la demande), met à jour
-  `data/`, puis déploie `site/` sur GitHub Pages.
+- `.github/workflows/update.yml` : lundi et mardi 8 h UTC (et à la demande). Le job `build`
+  met à jour et commite `data/`, puis prépare `site/` ; le job `deploy` le publie sur GitHub
+  Pages, seulement s'il y a eu du nouveau.
+- Hors saison, si le dernier commit date de plus de 45 jours, `build` pousse un commit vide
+  `chore: keepalive` pour que GitHub ne désactive pas le cron.
 - `.github/workflows/test.yml` : ruff + pytest à chaque push.
 
 ## Si le déploiement a échoué
 
 Il faut une fois activer GitHub Pages : Settings → Pages → Source = « GitHub Actions ».
 
-Si le déploiement échoue après le commit des données, le prochain lancement planifié ne fait
-rien : la manche figure déjà dans `data/history.json`. Pour forcer un nouveau calcul et un
-nouveau déploiement, relancer le workflow `update` à la main avec `force` coché :
+Si le job `deploy` échoue alors que `build` a déjà commité les données, le prochain lancement
+planifié ne fait rien : la manche et l'empreinte des résultats figurent déjà dans
+`data/history.json` et `data/state.json`. Dans la journée, « Re-run failed jobs » sur
+l'exécution suffit (l'artefact Pages n'est gardé qu'un jour). Sinon, forcer un nouveau calcul
+et un nouveau déploiement en relançant le workflow `update` à la main avec `force` coché :
 
 ```bash
 gh workflow run update -f force=true
