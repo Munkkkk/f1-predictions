@@ -119,7 +119,8 @@ def forecast(results: pd.DataFrame, schedule: pd.DataFrame, season: int,
                    | ((results["season"] == season) & (results["round"] <= upto_round))]
     state = season_state(past, season)
     lineup = current_lineup(past, season, upto_round)
-    future = schedule[schedule["round"] > upto_round].sort_values("round")
+    raced = past.loc[past["season"] == season, "round"].unique()
+    future = schedule[~schedule["round"].isin(raced)].sort_values("round")  # reports inclus
 
     races: list[RaceInput] = []
     sigma = DEFAULT_SIGMA
@@ -213,6 +214,10 @@ def validate(cp: Checkpoint) -> None:
         raise ValidationError(f"Probabilités de somme {p.sum():.4f} après la manche {cp.round}")
     if set(cp.sim.p_title) != set(cp.state.drivers):
         raise ValidationError(f"Pilotes manquants après la manche {cp.round}")
+    for field in ("sigma", "tau_driver", "tau_team", "dnf_shock"):
+        value = getattr(cp.shocks, field)
+        if not (np.isfinite(value) and value >= 0):
+            raise ValidationError(f"{field} = {value} invalide après la manche {cp.round}")
 
 
 def check_contiguous(rounds: list[int], schedule: pd.DataFrame, season: int) -> None:

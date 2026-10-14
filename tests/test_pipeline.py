@@ -387,3 +387,30 @@ def test_driver_who_changed_team_counts_only_for_his_current_team():
     lineup = current_lineup(results, 2025, 5).set_index("driver_id")["constructor_id"]
     assert lineup.index.is_unique
     assert lineup["d2"] == "t0" and lineup["d1"] == "t1"
+
+
+def test_postponed_round_stays_in_the_future(data_dir):
+    # La manche 3 (week-end sprint) est reportée : courue plus tard, elle reste à prévoir.
+    from f1pred.data import load_results, load_schedule
+    results = load_results(data_dir / "raw")
+    results = results[~((results["season"] == 2025) & (results["round"] == 3))]
+    cp = predict_from(results, load_schedule(data_dir / "raw", 2025), 2025, 5,
+                      n_sims=200, seed=0)
+    validate(cp)
+    assert sum(not r.is_sprint for r in cp.races) == 4  # manches 3, 6, 7, 8
+    assert sum(r.is_sprint for r in cp.races) == 1  # sprint de la manche 3
+
+
+@pytest.mark.parametrize("field", ["sigma", "tau_driver", "tau_team", "dnf_shock"])
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), -0.5])
+def test_validate_rejects_bad_shocks(data_dir, field, value):
+    from dataclasses import replace
+
+    from f1pred.data import load_results, load_schedule
+    results = load_results(data_dir / "raw")
+    cp = predict_from(results, load_schedule(data_dir / "raw", 2025), 2025, 5,
+                      n_sims=200, seed=0)
+    validate(cp)
+    cp.shocks = replace(cp.shocks, **{field: value})
+    with pytest.raises(ValidationError, match=field):
+        validate(cp)
