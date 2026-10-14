@@ -1,5 +1,7 @@
 """Orchestration : données → features → modèle → simulation → historique → site."""
 
+import hashlib
+import json
 from dataclasses import dataclass, replace
 from datetime import date
 from pathlib import Path
@@ -7,7 +9,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from f1pred.data import JolpicaClient, load_results, load_schedule, update_cache
+from f1pred.data import RESULT_COLUMNS, JolpicaClient, load_results, load_schedule, update_cache
 from f1pred.features import add_future_rows, build_features
 from f1pred.history import load_history, save_history, upsert
 from f1pred.model import DEFAULT_SIGMA, predict, train
@@ -273,6 +275,21 @@ def _context(final: Checkpoint, season: int, history: list[dict], metrics: dict,
     }
 
 
+def results_fingerprint(results: pd.DataFrame, season: int) -> str:
+    """sha256 des résultats de la saison, triés et sérialisés de façon déterministe."""
+    cur = results.loc[results["season"] == season, RESULT_COLUMNS]
+    cur = cur.sort_values(["season", "round", "is_sprint", "driver_id"])
+    return hashlib.sha256(cur.to_csv(index=False).encode("utf-8")).hexdigest()
+
+
+def _load_state(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+
+
+def _save_state(path: Path, state: dict) -> None:
+    path.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
+
+
 FINAL_SIMS = 200_000  # checkpoint publié : assez de tirages pour les probabilités rares
 
 
@@ -294,7 +311,12 @@ def run(data_dir: Path, out_dir: Path, offline: bool, seed: int = 0, n_sims: int
 
     hist_path = data_dir / "history.json"
     history = load_history(hist_path)
-    if not force and any(e["season"] == season and e["round"] == last for e in history):
+    # On ne saute le calcul que si la manche ET les résultats (corrections, sprint tardif)
+    # sont ceux du dernier calcul publié.
+    state_path = data_dir / "state.json"
+    fingerprint = results_fingerprint(results, season)
+    seen = any(e["season"] == season and e["round"] == last for e in history)
+    if not force and seen and _load_state(state_path).get("results_sha256") == fingerprint:
         return Outcome(False, f"Aucune nouvelle manche : saison {season}, manche {last}.")
 
     checkpoints = season_checkpoints(results, schedule, season, rounds, n_sims, seed,
@@ -308,4 +330,5 @@ def run(data_dir: Path, out_dir: Path, offline: bool, seed: int = 0, n_sims: int
     render_site(out_dir, _context(checkpoints[-1], season, history, metrics, schedule,
                                   n_sims_final, today, first_season))
     save_history(hist_path, history)
+    _save_state(state_path, {"season": season, "round": last, "results_sha256": fingerprint})
     return Outcome(True, f"Site mis à jour : saison {season}, manche {last}.")

@@ -271,3 +271,42 @@ def test_run_refuses_a_round_gap(data_dir, tmp_path):
             today=date(2025, 6, 1))
     assert not (data_dir / "history.json").exists()
     assert not (tmp_path / "site").exists()
+
+
+def _small_run(data_dir, tmp_path, **kw):
+    return run(data_dir, tmp_path / "site", offline=True, n_sims=100, n_sims_final=100,
+               today=date(2025, 6, 1), **kw)
+
+
+def test_run_recomputes_after_a_correction_of_the_last_round(data_dir, tmp_path):
+    # Repro r1 : une disqualification après coup n'était jamais prise en compte.
+    assert _small_run(data_dir, tmp_path).updated is True
+    raw = data_dir / "raw" / "results_2025.parquet"
+    cur = pd.read_parquet(raw)
+    winner = (cur["round"] == 5) & ~cur["is_sprint"] & (cur["position"] == 1)
+    cur.loc[winner, ["points", "finished"]] = [0.0, False]
+    cur.to_parquet(raw, index=False)
+    out = _small_run(data_dir, tmp_path)
+    assert out.updated is True
+    assert _small_run(data_dir, tmp_path).updated is False  # stable une fois recalculé
+
+
+def test_run_recomputes_when_a_late_sprint_arrives(data_dir, tmp_path):
+    raw = data_dir / "raw" / "results_2025.parquet"
+    full = pd.read_parquet(raw)
+    full[~(full["is_sprint"] & (full["round"] == 3))].to_parquet(raw, index=False)
+    assert _small_run(data_dir, tmp_path).updated is True
+    full.to_parquet(raw, index=False)
+    assert _small_run(data_dir, tmp_path).updated is True
+
+
+def test_results_fingerprint_ignores_row_order_and_other_seasons(data_dir):
+    from f1pred.data import load_results
+    from f1pred.pipeline import results_fingerprint
+    results = load_results(data_dir / "raw")
+    fp = results_fingerprint(results, 2025)
+    assert fp == results_fingerprint(results.sample(frac=1, random_state=1), 2025)
+    assert fp == results_fingerprint(results[results["season"] != 2024], 2025)
+    changed = results.copy()
+    changed.loc[changed.index[-1], "points"] += 1
+    assert fp != results_fingerprint(changed, 2025)
