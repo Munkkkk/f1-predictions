@@ -4,7 +4,8 @@ Probabilité de chaque pilote de remporter le championnat du monde de F1, mise �
 automatiquement après chaque Grand Prix.
 
 **Méthode :** deux modèles LightGBM (position d'arrivée, abandon) entraînés depuis 2014,
-puis 10 000 simulations Monte Carlo de la fin de saison. Détails sur la page « Méthode » du site.
+puis 200 000 simulations Monte Carlo de la fin de saison (10 000 pour l'historique et le
+backtest). Détails sur la page « Méthode » du site.
 
 ## Lancer en local
 
@@ -22,11 +23,19 @@ uv run pytest
   Pages, seulement s'il y a eu du nouveau.
 - Hors saison, si le dernier commit date de plus de 45 jours, `build` pousse un commit vide
   `chore: keepalive` pour que GitHub ne désactive pas le cron.
-- `.github/workflows/test.yml` : ruff + pytest à chaque push.
+- `.github/workflows/test.yml` : ruff + pytest à chaque push et à chaque pull request.
+- Le cron et l'environnement `github-pages` ne fonctionnent que sur la branche par défaut.
+
+## Premier déploiement
+
+1. Fusionner le travail dans la branche par défaut (`main`).
+2. Settings → Pages → Source = « GitHub Actions ».
+3. Pas de protection de branche exigeant une PR sur `main` : le bot y pousse `data/`.
+4. Lancer une fois `gh workflow run update -f force=true`. `data/state.json` est versionné :
+   sans `force`, le premier lancement planifié ne voit aucune nouvelle manche et ne publie
+   rien (le site reste en 404 jusqu'au GP suivant).
 
 ## Si le déploiement a échoué
-
-Il faut une fois activer GitHub Pages : Settings → Pages → Source = « GitHub Actions ».
 
 Si le job `deploy` échoue alors que `build` a déjà commité les données, le prochain lancement
 planifié ne fait rien : la manche et l'empreinte des résultats figurent déjà dans
