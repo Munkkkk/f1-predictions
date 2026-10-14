@@ -45,8 +45,9 @@ class FakeSession:
         self.calls = []
         self.headers = {}
 
-    def get(self, url, params=None, timeout=None):
+    def get(self, url, params=None, timeout=None, **kwargs):
         self.calls.append((url, dict(params or {})))
+        self.kwargs = kwargs
         return self.responses.pop(0)
 
 
@@ -282,3 +283,12 @@ def test_latest_sprint_weekend_needs_sprint_rows():
     df = pd.DataFrame(_rows(2026, 1, 22, False) + _rows(2026, 2, 22, True)
                       + _rows(2026, 2, 22, False))
     assert set(drop_incomplete_rounds(df, sched)["round"]) == {1, 2}
+
+
+def test_client_refuses_redirects():
+    # Une redirection (vers un autre hôte ou non) n'est jamais suivie : erreur immédiate.
+    client = make_client([FakeResponse(302, {"MRData": {"total": "0"}})] * 3)
+    with pytest.raises(FetchError, match="redirection"):
+        client.get_pages("2026/results")
+    assert len(client.session.calls) == 1
+    assert client.session.kwargs.get("allow_redirects") is False

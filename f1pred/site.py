@@ -1,8 +1,10 @@
 """Génération du site statique (Jinja2 + Plotly)."""
 
+import html
 from pathlib import Path
 
 import plotly.graph_objects as go
+import plotly.offline
 from jinja2 import Environment, PackageLoader, select_autoescape
 
 ACCENT = "#e10600"
@@ -15,6 +17,13 @@ TOP_N_BARS = 10
 TOP_N_LINES = 6
 
 CHART_CONFIG = {"displayModeBar": False}
+PLOTLY_JS = "plotly.min.js"  # servi par le site lui-même, version de plotly.py
+
+
+def _label(text: str) -> str:
+    """Plotly.js interprète un sous-ensemble de HTML dans les libellés : on échappe les
+    chaînes venues de l'API (noms de pilotes, de GP)."""
+    return html.escape(str(text), quote=False)
 
 
 def format_pct(p: float, decided: bool) -> str:
@@ -54,18 +63,23 @@ def _layout(fig: go.Figure, height: int) -> go.Figure:
     return fig
 
 
-def _bars(drivers: list[dict], decided: bool) -> str:
+def _bars_figure(drivers: list[dict], decided: bool) -> go.Figure:
     top = drivers[:TOP_N_BARS][::-1]
     fig = go.Figure(go.Bar(
-        x=[d["p_title"] * 100 for d in top], y=[d["name"] for d in top], orientation="h",
+        x=[d["p_title"] * 100 for d in top], y=[_label(d["name"]) for d in top],
+        orientation="h",
         marker_color=[ACCENT if i == len(top) - 1 else MUTED for i in range(len(top))],
-        text=[format_pct(d["p_title"], decided) for d in top], textposition="auto",
+        text=[_label(format_pct(d["p_title"], decided)) for d in top], textposition="auto",
         cliponaxis=False,
         hovertemplate="%{y} : %{text}<extra></extra>",
     ))
     fig.update_xaxes(range=[0, 108], showgrid=False, visible=False)
     fig.update_yaxes(showgrid=False, automargin=True)
-    return _layout(fig, 40 * len(top) + 40).to_html(
+    return _layout(fig, 40 * len(top) + 40)
+
+
+def _bars(drivers: list[dict], decided: bool) -> str:
+    return _bars_figure(drivers, decided).to_html(
         full_html=False, include_plotlyjs=False, config=CHART_CONFIG)
 
 
@@ -77,14 +91,16 @@ def _line_colors(drivers: list[dict]) -> dict[str, str]:
     return colors
 
 
-def _lines(history: list[dict], names: dict[str, str], drivers: list[dict]) -> str:
+def _lines_figure(history: list[dict], names: dict[str, str],
+                  drivers: list[dict]) -> go.Figure:
     fig = go.Figure()
     colors = _line_colors(drivers)
-    x = [e["race_name"].replace(" Grand Prix", "") for e in history]
+    x = [_label(e["race_name"].replace(" Grand Prix", "")) for e in history]
     for i, d in enumerate(drivers[:TOP_N_LINES]):
         y = [e["probabilities"].get(d["driver_id"], 0.0) * 100 for e in history]
         fig.add_trace(go.Scatter(
-            x=x, y=y, mode="lines+markers", name=names.get(d["driver_id"], d["driver_id"]),
+            x=x, y=y, mode="lines+markers",
+            name=_label(names.get(d["driver_id"], d["driver_id"])),
             line=dict(width=3 if i == 0 else 2, color=colors[d["driver_id"]]),
             marker=dict(size=8),
             hovertemplate="%{fullData.name} : %{y:.1f} %<extra></extra>",
@@ -93,15 +109,22 @@ def _lines(history: list[dict], names: dict[str, str], drivers: list[dict]) -> s
     fig.update_xaxes(showgrid=False)
     fig = _layout(fig, 380)
     fig.update_layout(showlegend=True, legend=dict(orientation="h", y=-0.2), hovermode="x unified")
-    return fig.to_html(full_html=False, include_plotlyjs=False, config=CHART_CONFIG)
+    return fig
+
+
+def _lines(history: list[dict], names: dict[str, str], drivers: list[dict]) -> str:
+    return _lines_figure(history, names, drivers).to_html(
+        full_html=False, include_plotlyjs=False, config=CHART_CONFIG)
 
 
 def render_site(out_dir: Path, context: dict) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / PLOTLY_JS).write_text(plotly.offline.get_plotlyjs(), encoding="utf-8",
+                                     newline="")
     charts = {
         "bars_html": _bars(context["drivers"], context["decided"]),
         "lines_html": _lines(context["history"], context["names"], context["drivers"]),
     }
     for page in ("index.html", "methode.html"):
-        html = _env.get_template(page).render(**context, **charts)
-        (out_dir / page).write_text(html, encoding="utf-8")
+        text = _env.get_template(page).render(**context, **charts, plotly_js=PLOTLY_JS)
+        (out_dir / page).write_text(text, encoding="utf-8")

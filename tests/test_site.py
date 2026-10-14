@@ -152,3 +152,46 @@ def test_table_follows_context_order(tmp_path):
     render_site(tmp_path, ctx)
     table = (tmp_path / "index.html").read_text(encoding="utf-8").split("<tbody>")[1]
     assert table.index("George Russell") < table.index("Andrea Kimi Antonelli")
+
+
+EVIL = '<a href="https://evil.example">x</a>'
+CSP = ("default-src 'none'; script-src 'self' 'unsafe-inline'; "
+       "style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; "
+       "base-uri 'none'; form-action 'none'")
+
+
+def test_plotly_is_self_hosted_and_loaded_only_where_charts_are(tmp_path):
+    render_site(tmp_path, context())
+    js = (tmp_path / "plotly.min.js").read_text(encoding="utf-8")
+    assert "plotly" in js[:2000].lower() and len(js) > 1_000_000
+    index = (tmp_path / "index.html").read_text(encoding="utf-8")
+    methode = (tmp_path / "methode.html").read_text(encoding="utf-8")
+    assert '<script src="plotly.min.js"' in index
+    assert "plotly.min.js" not in methode
+    assert "cdn.plot.ly" not in index + methode
+    assert "https://" not in index.split("<body>")[0]  # aucune ressource externe dans <head>
+
+
+def test_pages_carry_csp_and_referrer_policy(tmp_path):
+    render_site(tmp_path, context())
+    for page in ("index.html", "methode.html"):
+        html = (tmp_path / page).read_text(encoding="utf-8")
+        assert '<meta name="referrer" content="no-referrer">' in html
+        assert f'<meta http-equiv="Content-Security-Policy" content="{CSP}">' in html
+
+
+def test_api_strings_are_escaped_in_chart_labels(tmp_path):
+    from f1pred.site import _bars_figure, _lines_figure
+    ctx = context()
+    ctx["drivers"][0]["name"] = EVIL
+    ctx["names"]["antonelli"] = EVIL
+    ctx["history"][0]["race_name"] = EVIL
+    bars = _bars_figure(ctx["drivers"], decided=False).to_json()
+    lines = _lines_figure(ctx["history"], ctx["names"], ctx["drivers"]).to_json()
+    for fig_json in (bars, lines):
+        assert "<a" not in fig_json and r"\u003ca" not in fig_json
+        assert "&lt;a href" in fig_json
+    render_site(tmp_path, ctx)
+    index = (tmp_path / "index.html").read_text(encoding="utf-8")
+    assert EVIL not in index
+    assert r"\u003ca href" not in index

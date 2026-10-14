@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block nav_index %}active{% endblock %}
+{% block scripts %}<script src="{{ plotly_js }}" charset="utf-8"></script>{% endblock %}
 {% block content %}
   {% if decided %}
   <div class="banner">🏆 {{ champion }} est Champion du monde {{ season }}.</div>

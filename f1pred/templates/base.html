@@ -4,7 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Prédictions F1 {{ season }}{% endblock %}</title>
-  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
+  <meta name="referrer" content="no-referrer">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; base-uri 'none'; form-action 'none'">
+  {% block scripts %}{% endblock %}
   <style>
     :root { --bg: #ffffff; --fg: #15151e; --muted: #6b7079; --card: #f4f4f6; --accent: #e10600; }
     @media (prefers-color-scheme: dark) {

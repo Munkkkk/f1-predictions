@@ -41,8 +41,12 @@ class JolpicaClient:
             self.sleep(self.min_interval)
             try:
                 response = self.session.get(
-                    url, params={"limit": PAGE_LIMIT, "offset": offset}, timeout=30
+                    url, params={"limit": PAGE_LIMIT, "offset": offset}, timeout=30,
+                    allow_redirects=False,
                 )
+                if 300 <= response.status_code < 400:  # jamais suivie : hôte non vérifié
+                    raise FetchError(f"{path} : redirection refusée "
+                                     f"(HTTP {response.status_code})")
                 response.raise_for_status()
                 return response.json()
             except requests.RequestException as exc:
