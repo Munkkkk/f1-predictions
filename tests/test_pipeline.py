@@ -264,15 +264,32 @@ def test_predict_from_forwards_teams_and_shocks(data_dir, monkeypatch):
     assert cp.shocks == shocks
 
 
-def test_run_refuses_a_round_gap(data_dir, tmp_path):
+def test_run_refuses_a_round_gap_absent_from_the_schedule(data_dir, tmp_path):
+    # Un trou que le calendrier n'explique pas (manche 3 courue nulle part) reste une erreur.
     raw = data_dir / "raw"
     cur = pd.read_parquet(raw / "results_2025.parquet")
     cur[cur["round"] != 3].to_parquet(raw / "results_2025.parquet", index=False)
+    sched = pd.read_parquet(raw / "schedule_2025.parquet")
+    sched[sched["round"] != 3].to_parquet(raw / "schedule_2025.parquet", index=False)
     with pytest.raises(ValidationError, match="3"):
         run(data_dir, tmp_path / "site", offline=True, n_sims=100, n_sims_final=100,
             today=date(2025, 6, 1))
     assert not (data_dir / "history.json").exists()
     assert not (tmp_path / "site").exists()
+
+
+def test_run_warns_about_a_postponed_round(data_dir, tmp_path, caplog):
+    # Repro I2 : une manche reportée (encore au calendrier) bloquait toute exécution.
+    raw = data_dir / "raw"
+    cur = pd.read_parquet(raw / "results_2025.parquet")
+    cur[cur["round"] != 3].to_parquet(raw / "results_2025.parquet", index=False)
+    with caplog.at_level("WARNING", logger="f1pred.pipeline"):
+        out = run(data_dir, tmp_path / "site", offline=True, n_sims=100, n_sims_final=100,
+                  today=date(2025, 6, 1))
+    assert out.updated is True
+    assert "3" in out.message and "non courue" in out.message
+    assert any("non courue" in r.getMessage() for r in caplog.records)
+    assert (tmp_path / "site" / "index.html").exists()
 
 
 def _small_run(data_dir, tmp_path, **kw):

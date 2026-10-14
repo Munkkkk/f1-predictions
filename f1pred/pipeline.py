@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import logging
 from dataclasses import dataclass, replace
 from datetime import date
 from pathlib import Path
@@ -25,6 +26,8 @@ from f1pred.simulate import (
     simulate_season,
 )
 from f1pred.site import render_site
+
+log = logging.getLogger(__name__)
 
 FIRST_SEASON = 2014
 ABSENT_POSITION = 99.0  # pilote sans baquet : toujours dernier, et abandon garanti
@@ -220,14 +223,21 @@ def validate(cp: Checkpoint) -> None:
             raise ValidationError(f"{field} = {value} invalide après la manche {cp.round}")
 
 
-def check_contiguous(rounds: list[int], schedule: pd.DataFrame, season: int) -> None:
-    """Les manches courues doivent être exactement les manches 1..dernière du calendrier."""
+def check_contiguous(rounds: list[int], schedule: pd.DataFrame, season: int) -> list[int]:
+    """Manches 1..dernière du calendrier non courues (reportées) ; erreur si inexplicable.
+
+    Une manche manquante encore au calendrier (reportée, ou annulée mais pas encore retirée)
+    n'est qu'un avertissement : la prévision la garde à venir. Une manche courue absente du
+    calendrier, ou un trou que le calendrier n'explique pas, reste une erreur.
+    """
     last = rounds[-1]
-    expected = sorted(int(r) for r in schedule["round"] if r <= last)
-    if rounds != expected or expected != list(range(1, last + 1)):
-        missing = sorted(set(range(1, last + 1)) - set(rounds))
+    scheduled = {int(r) for r in schedule["round"]}
+    missing = sorted(set(range(1, last + 1)) - set(rounds))
+    unexplained = sorted((set(rounds) - scheduled) | (set(missing) - scheduled))
+    if unexplained:
         raise ValidationError(f"Saison {season} : manches courues {rounds} non contiguës "
-                              f"(manquantes : {missing})")
+                              f"(manquantes : {missing}, hors calendrier : {unexplained})")
+    return missing
 
 
 def backtest_metrics(checkpoints: list[Checkpoint], results: pd.DataFrame, season: int,
@@ -335,7 +345,12 @@ def run(data_dir: Path, out_dir: Path, offline: bool, seed: int = 0, n_sims: int
     schedule = load_schedule(raw, season)
     rounds = sorted(int(r) for r in results.loc[results["season"] == season, "round"].unique())
     last = rounds[-1]
-    check_contiguous(rounds, schedule, season)
+    postponed = check_contiguous(rounds, schedule, season)
+    warning = ""
+    if postponed:
+        warning = f" Attention : manche(s) {postponed} non courue(s), gardée(s) à venir."
+        log.warning("Saison %s : manche(s) %s non courue(s), gardée(s) à venir.",
+                    season, postponed)
 
     hist_path = data_dir / "history.json"
     history = load_history(hist_path)
@@ -345,7 +360,8 @@ def run(data_dir: Path, out_dir: Path, offline: bool, seed: int = 0, n_sims: int
     fingerprint = results_fingerprint(results, season)
     seen = any(e["season"] == season and e["round"] == last for e in history)
     if not force and seen and _load_state(state_path).get("results_sha256") == fingerprint:
-        return Outcome(False, f"Aucune nouvelle manche : saison {season}, manche {last}.")
+        return Outcome(False, f"Aucune nouvelle manche : saison {season}, manche {last}."
+                       + warning)
 
     checkpoints = season_checkpoints(results, schedule, season, rounds, n_sims, seed,
                                      n_sims_final)
@@ -359,4 +375,4 @@ def run(data_dir: Path, out_dir: Path, offline: bool, seed: int = 0, n_sims: int
                                   n_sims_final, today, first_season))
     save_history(hist_path, history)
     _save_state(state_path, {"season": season, "round": last, "results_sha256": fingerprint})
-    return Outcome(True, f"Site mis à jour : saison {season}, manche {last}.")
+    return Outcome(True, f"Site mis à jour : saison {season}, manche {last}." + warning)
