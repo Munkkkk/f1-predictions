@@ -4,6 +4,7 @@ import time
 from collections.abc import Iterable
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import requests
 
@@ -51,13 +52,38 @@ class JolpicaClient:
         raise FetchError(f"Échec de {path} après {self.retries} tentatives") from last_error
 
     def get_pages(self, path: str) -> list[dict]:
+        """Toutes les pages d'une ressource ; le total de référence est celui de la dernière."""
         pages = [self._get(path, 0)]
-        total = int(pages[0]["MRData"]["total"])
+        first_total = total = _total(pages[0])
+        _check_not_empty(pages[0], path, 0, total)
         offset = PAGE_LIMIT
         while offset < total:
-            pages.append(self._get(path, offset))
+            page = self._get(path, offset)
+            total = _total(page)
+            _check_not_empty(page, path, offset, total)
+            pages.append(page)
             offset += PAGE_LIMIT
+        if total != first_total:  # une manche publiée pendant la pagination décale les pages
+            raise FetchError(f"{path} : total passé de {first_total} à {total} en cours de "
+                             "pagination")
         return pages
+
+
+def _total(page: dict) -> int:
+    return int(page["MRData"]["total"])
+
+
+def _check_not_empty(page: dict, path: str, offset: int, total: int) -> None:
+    """Une page 200 OK sans course alors que des lignes sont attendues est un incident."""
+    races = page["MRData"].get("RaceTable", {}).get("Races")
+    if races is not None and not races and offset < total:
+        raise FetchError(f"{path} : page vide à l'offset {offset} (total {total})")
+
+
+def _check_count(path: str, pages: list[dict], received: int) -> None:
+    expected = _total(pages[-1])
+    if received != expected:
+        raise FetchError(f"{path} : {received} lignes reçues pour un total annoncé de {expected}")
 
 
 def parse_results(payload: dict, sprint: bool) -> pd.DataFrame:
@@ -98,23 +124,52 @@ def parse_schedule(payload: dict) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=SCHEDULE_COLUMNS)
 
 
-def drop_incomplete_rounds(results: pd.DataFrame) -> pd.DataFrame:
-    """Ignore toute manche dont le GP n'a pas encore au moins MIN_RESULTS résultats."""
+def drop_incomplete_rounds(results: pd.DataFrame,
+                           schedule: pd.DataFrame | None = None) -> pd.DataFrame:
+    """Ignore toute manche dont le GP ne semble pas encore entièrement publié.
+
+    Chaque GP doit avoir au moins MIN_RESULTS lignes. La dernière manche de chaque saison,
+    la seule qui peut être en cours de publication, doit en plus avoir au moins autant de
+    lignes que le GP complet précédent et, si le calendrier en fait un week-end sprint,
+    ses lignes de sprint. Les manches plus anciennes plus courtes (forfait réel) restent.
+    """
     # astype(bool) : après concat avec un sprint vide, la colonne est en object et ~ casse.
-    gp_counts = results[~results["is_sprint"].astype(bool)].groupby(["season", "round"]).size()
-    complete = set(gp_counts[gp_counts >= MIN_RESULTS].index)
+    is_sprint = results["is_sprint"].astype(bool)
+    gp_counts = results[~is_sprint].groupby(["season", "round"]).size()
+    sprint_counts = results[is_sprint].groupby(["season", "round"]).size()
+    sprint_weekends = set()
+    if schedule is not None and not schedule.empty:
+        flagged = schedule[schedule["has_sprint"].astype(bool)]
+        sprint_weekends = set(zip(flagged["season"], flagged["round"], strict=True))
+    complete = set()
+    for _, counts in gp_counts.groupby(level="season"):
+        counts = counts[counts >= MIN_RESULTS]
+        if counts.empty:
+            continue
+        keys = list(counts.index)
+        complete.update(keys[:-1])
+        latest = keys[-1]
+        reference = int(counts.iloc[-2]) if len(counts) > 1 else MIN_RESULTS
+        has_sprint = sprint_counts.get(latest, 0) >= MIN_RESULTS
+        if counts.iloc[-1] >= reference and (latest not in sprint_weekends or has_sprint):
+            complete.add(latest)
     keep = [(s, r) in complete for s, r in zip(results["season"], results["round"], strict=True)]
-    return results[keep].reset_index(drop=True)
+    return results[np.array(keep, dtype=bool)].reset_index(drop=True)
 
 
 def fetch_season(client: JolpicaClient, season: int) -> tuple[pd.DataFrame, pd.DataFrame]:
-    gp = [parse_results(p, sprint=False) for p in client.get_pages(f"{season}/results")]
-    sprint = [parse_results(p, sprint=True) for p in client.get_pages(f"{season}/sprint")]
-    schedule = pd.concat(
-        [parse_schedule(p) for p in client.get_pages(f"{season}/races")], ignore_index=True
-    )
-    results = pd.concat(gp + sprint, ignore_index=True)
-    return drop_incomplete_rounds(results), schedule
+    """Résultats (GP + sprints) et calendrier d'une saison ; FetchError si incomplets."""
+    frames = []
+    for path, sprint in ((f"{season}/results", False), (f"{season}/sprint", True)):
+        pages = client.get_pages(path)
+        parsed = [parse_results(p, sprint=sprint) for p in pages]
+        _check_count(path, pages, sum(len(df) for df in parsed))
+        frames += parsed
+    pages = client.get_pages(f"{season}/races")
+    schedule = pd.concat([parse_schedule(p) for p in pages], ignore_index=True)
+    _check_count(f"{season}/races", pages, len(schedule))
+    results = pd.concat(frames, ignore_index=True)
+    return drop_incomplete_rounds(results, schedule), schedule
 
 
 def _season_complete(raw_dir: Path, season: int) -> bool:
@@ -128,6 +183,10 @@ def _season_complete(raw_dir: Path, season: int) -> bool:
     return cached_round == scheduled_round
 
 
+def _sessions(df: pd.DataFrame) -> set[tuple[int, bool]]:
+    return set(zip(df["round"].astype(int), df["is_sprint"].astype(bool), strict=True))
+
+
 def update_cache(
     raw_dir: Path, seasons: Iterable[int], current_season: int, client: JolpicaClient
 ) -> None:
@@ -137,6 +196,12 @@ def update_cache(
         if season != current_season and _season_complete(raw_dir, season):
             continue
         results, schedule = fetch_season(client, season)
+        if results_path.exists():
+            cached = pd.read_parquet(results_path, columns=["round", "is_sprint"])
+            missing = sorted(_sessions(cached) - _sessions(results))
+            if missing:  # le cache ne recule jamais : une réponse incomplète ne l'écrase pas
+                raise FetchError(f"Saison {season} : la réponse ne contient plus "
+                                 f"(manche, sprint) = {missing} ; cache conservé")
         if not schedule.empty:
             schedule.to_parquet(raw_dir / f"schedule_{season}.parquet", index=False)
         if not results.empty:

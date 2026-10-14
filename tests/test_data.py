@@ -165,6 +165,120 @@ def test_update_cache_refetches_past_season_missing_last_round(tmp_path):
     ]).to_parquet(tmp_path / "schedule_2025.parquet")
     empty = {"MRData": {"total": "0", "RaceTable": {"Races": []}}}
     client = make_client([FakeResponse(200, empty)] * 3)
-    update_cache(tmp_path, [2025], current_season=2026, client=client)
+    # La réponse (vide) perdrait la manche 1 en cache : refusée, mais elle a bien été demandée.
+    with pytest.raises(FetchError):
+        update_cache(tmp_path, [2025], current_season=2026, client=client)
     urls = [url for url, _ in client.session.calls]
     assert urls and all("/2025/" in url for url in urls)
+
+
+# --- Complétude des données (audit de pannes #1, #3, #6) ---------------------------------
+
+def _season(n_rounds=6, n_drivers=22, sprint_rounds=(2,)):
+    from tests.helpers import make_results, make_schedule
+    res = make_results(seasons=(2026,), n_rounds=n_rounds, n_drivers=n_drivers,
+                       sprint_rounds=sprint_rounds)
+    return res, make_schedule(2026, 10, sprint_rounds=sprint_rounds)
+
+
+def _fake_client(res, sched, hook=None):
+    from tests.helpers import JolpicaFake
+    return JolpicaClient(session=JolpicaFake(res, sched, hook), sleep=lambda s: None)
+
+
+def test_fetch_season_round_trips_through_fake_api():
+    from f1pred.data import fetch_season
+    res, sched = _season()
+    got, schedule = fetch_season(_fake_client(res, sched), 2026)
+    assert len(got) == len(res)
+    assert schedule["round"].tolist() == list(range(1, 11))
+
+
+def test_glitched_empty_page_raises_and_leaves_cache_untouched(tmp_path):
+    # Repro r3 : une page 200 OK vide au milieu de la pagination supprimait des manches.
+    from tests.helpers import JolpicaResponse
+    res, sched = _season()
+    res.to_parquet(tmp_path / "results_2026.parquet", index=False)
+    before = (tmp_path / "results_2026.parquet").read_bytes()
+    total = int((~res["is_sprint"]).sum())
+
+    def hook(url, offset):
+        if url.endswith("2026/results/") and offset == 100:
+            return JolpicaResponse({"MRData": {"total": str(total), "RaceTable": {"Races": []}}})
+
+    with pytest.raises(FetchError):
+        update_cache(tmp_path, [2026], current_season=2026, client=_fake_client(res, sched, hook))
+    assert (tmp_path / "results_2026.parquet").read_bytes() == before
+
+
+def test_fetch_raises_when_row_count_differs_from_total():
+    from f1pred.data import fetch_season
+    from tests.helpers import JolpicaResponse, jolpica_page
+    res, sched = _season()
+    gp = res[~res["is_sprint"]]
+
+    def hook(url, offset):  # la page 2 annonce le bon total mais perd 3 lignes
+        if url.endswith("2026/results/") and offset == 100:
+            page = jolpica_page(gp, False, 100, 100)
+            page["MRData"]["RaceTable"]["Races"][-1]["Results"] = (
+                page["MRData"]["RaceTable"]["Races"][-1]["Results"][:-3])
+            return JolpicaResponse(page)
+
+    with pytest.raises(FetchError, match="2026/results"):
+        fetch_season(_fake_client(res, sched, hook), 2026)
+
+
+def test_fetch_raises_when_total_grows_during_pagination():
+    from f1pred.data import fetch_season
+    from tests.helpers import JolpicaResponse, jolpica_page
+    res, sched = _season()
+    gp = res[~res["is_sprint"]]
+
+    def hook(url, offset):  # une manche est publiée entre la page 1 et la page 2
+        if url.endswith("2026/results/") and offset == 100:
+            return JolpicaResponse(jolpica_page(gp, False, 100, 100, total=len(gp) + 22))
+
+    with pytest.raises(FetchError):
+        fetch_season(_fake_client(res, sched, hook), 2026)
+
+
+def test_update_cache_never_drops_a_cached_round(tmp_path):
+    res, sched = _season()
+    res.to_parquet(tmp_path / "results_2026.parquet", index=False)
+    before = (tmp_path / "results_2026.parquet").read_bytes()
+    shorter = res[res["round"] < 6]  # l'API ne renvoie plus la manche 6 (cohérente avec total)
+    with pytest.raises(FetchError, match="6"):
+        update_cache(tmp_path, [2026], current_season=2026, client=_fake_client(shorter, sched))
+    assert (tmp_path / "results_2026.parquet").read_bytes() == before
+
+
+def test_partial_latest_gp_is_dropped():
+    # Repro r2 : 15 lignes sur 22 (= MIN_RESULTS) passaient pour une manche complète.
+    df = pd.DataFrame(_rows(2026, 1, 22, False) + _rows(2026, 2, 22, False)
+                      + _rows(2026, 3, 15, False))
+    assert set(drop_incomplete_rounds(df)["round"]) == {1, 2}
+
+
+def test_first_round_uses_min_results():
+    df = pd.DataFrame(_rows(2026, 1, 15, False))
+    assert set(drop_incomplete_rounds(df)["round"]) == {1}
+    df = pd.DataFrame(_rows(2026, 1, 14, False))
+    assert drop_incomplete_rounds(df).empty
+
+
+def test_earlier_short_round_is_kept():
+    # Un forfait réel (19 voitures après 20) n'est pas une publication partielle : seule la
+    # dernière manche, la seule qui peut être en cours de publication, est comparée.
+    df = pd.DataFrame(_rows(2024, 1, 20, False) + _rows(2024, 2, 19, False)
+                      + _rows(2024, 3, 20, False))
+    assert set(drop_incomplete_rounds(df)["round"]) == {1, 2, 3}
+
+
+def test_latest_sprint_weekend_needs_sprint_rows():
+    sched = pd.DataFrame([dict(season=2026, round=r, race_name="GP", date="2026-01-01",
+                               circuit_id="c", has_sprint=r == 2) for r in (1, 2)])
+    df = pd.DataFrame(_rows(2026, 1, 22, False) + _rows(2026, 2, 22, False))
+    assert set(drop_incomplete_rounds(df, sched)["round"]) == {1}
+    df = pd.DataFrame(_rows(2026, 1, 22, False) + _rows(2026, 2, 22, True)
+                      + _rows(2026, 2, 22, False))
+    assert set(drop_incomplete_rounds(df, sched)["round"]) == {1, 2}

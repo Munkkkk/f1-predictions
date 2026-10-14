@@ -190,6 +190,16 @@ def validate(cp: Checkpoint) -> None:
         raise ValidationError(f"Pilotes manquants après la manche {cp.round}")
 
 
+def check_contiguous(rounds: list[int], schedule: pd.DataFrame, season: int) -> None:
+    """Les manches courues doivent être exactement les manches 1..dernière du calendrier."""
+    last = rounds[-1]
+    expected = sorted(int(r) for r in schedule["round"] if r <= last)
+    if rounds != expected or expected != list(range(1, last + 1)):
+        missing = sorted(set(range(1, last + 1)) - set(rounds))
+        raise ValidationError(f"Saison {season} : manches courues {rounds} non contiguës "
+                              f"(manquantes : {missing})")
+
+
 def backtest_metrics(checkpoints: list[Checkpoint], results: pd.DataFrame, season: int,
                      n_sims: int, seed: int) -> dict:
     """Score de Brier de la prédiction de la course suivante, pour chaque checkpoint."""
@@ -280,6 +290,7 @@ def run(data_dir: Path, out_dir: Path, offline: bool, seed: int = 0, n_sims: int
     schedule = load_schedule(raw, season)
     rounds = sorted(int(r) for r in results.loc[results["season"] == season, "round"].unique())
     last = rounds[-1]
+    check_contiguous(rounds, schedule, season)
 
     hist_path = data_dir / "history.json"
     history = load_history(hist_path)

@@ -260,3 +260,14 @@ def test_predict_from_forwards_teams_and_shocks(data_dir, monkeypatch):
     assert (seen["sigma"], seen["tau_driver"], seen["tau_team"], seen["dnf_shock"]) == (
         2.5, 1.1, 1.2, 0.3)
     assert cp.shocks == shocks
+
+
+def test_run_refuses_a_round_gap(data_dir, tmp_path):
+    raw = data_dir / "raw"
+    cur = pd.read_parquet(raw / "results_2025.parquet")
+    cur[cur["round"] != 3].to_parquet(raw / "results_2025.parquet", index=False)
+    with pytest.raises(ValidationError, match="3"):
+        run(data_dir, tmp_path / "site", offline=True, n_sims=100, n_sims_final=100,
+            today=date(2025, 6, 1))
+    assert not (data_dir / "history.json").exists()
+    assert not (tmp_path / "site").exists()
