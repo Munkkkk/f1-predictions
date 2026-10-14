@@ -87,15 +87,38 @@ def season_state(results: pd.DataFrame, season: int) -> SeasonState:
     return SeasonState(drivers, names, teams, points, countback, int(cur["round"].max()))
 
 
+LINEUP_WINDOW = 5  # GP récents qui fixent les titulaires de chaque écurie
+SEATS_PER_TEAM = 2
+
+
+def current_lineup(results: pd.DataFrame, season: int, upto_round: int) -> pd.DataFrame:
+    """Titulaires pour la suite : par écurie, les 2 pilotes aux plus de départs sur les
+    `LINEUP_WINDOW` derniers GP de la saison (égalité : le départ le plus récent).
+
+    Un titulaire absent une course garde son baquet ; un réserviste d'un week-end ne le garde
+    pas. Un pilote ne compte que pour sa dernière écurie.
+    """
+    gp = results[(results["season"] == season) & (results["round"] <= upto_round)
+                 & ~results["is_sprint"].astype(bool)]
+    window = sorted(gp["round"].unique())[-LINEUP_WINDOW:]
+    gp = gp[gp["round"].isin(window)].sort_values("round")
+    latest = gp.drop_duplicates("driver_id", keep="last").set_index("driver_id")
+    gp = gp[gp["constructor_id"].to_numpy()
+            == latest.loc[gp["driver_id"], "constructor_id"].to_numpy()]
+    starts = (gp.groupby("driver_id")["round"].agg(starts="count", last="max")
+              .join(latest[["driver_name", "constructor_id"]]).reset_index())
+    starts = starts.sort_values(["starts", "last", "driver_id"], ascending=[False, False, True])
+    lineup = starts.groupby("constructor_id", sort=False).head(SEATS_PER_TEAM)
+    return lineup.sort_values("driver_id")[["driver_id", "driver_name", "constructor_id"]]
+
+
 def forecast(results: pd.DataFrame, schedule: pd.DataFrame, season: int,
              upto_round: int) -> Forecast:
     """Entraîne le modèle sur les données connues après `upto_round` et prévoit la suite."""
     past = results[(results["season"] < season)
                    | ((results["season"] == season) & (results["round"] <= upto_round))]
     state = season_state(past, season)
-    last_gp = past[(past["season"] == season) & (past["round"] == upto_round)
-                   & ~past["is_sprint"].astype(bool)]
-    lineup = last_gp.drop_duplicates("driver_id")[["driver_id", "driver_name", "constructor_id"]]
+    lineup = current_lineup(past, season, upto_round)
     future = schedule[schedule["round"] > upto_round].sort_values("round")
 
     races: list[RaceInput] = []

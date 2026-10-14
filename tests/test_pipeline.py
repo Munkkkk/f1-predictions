@@ -53,8 +53,10 @@ def test_predict_from_gives_valid_probabilities(data_dir):
 def test_replaced_driver_keeps_points_but_scores_nothing(data_dir):
     from f1pred.data import load_results, load_schedule
     results = load_results(data_dir / "raw")
-    # d9 est remplacé par "rookie" à la manche 5.
-    mask = (results["season"] == 2025) & (results["round"] == 5) & (results["driver_id"] == "d9")
+    # d9 est remplacé pour de bon par "rookie" à partir de la manche 3 : sur les 5 derniers GP,
+    # rookie (3 départs) passe devant d9 (2 départs) chez t4.
+    mask = ((results["season"] == 2025) & (results["round"] >= 3)
+            & (results["driver_id"] == "d9"))
     results.loc[mask, ["driver_id", "driver_name"]] = ["rookie", "Rookie"]
     cp = predict_from(results, load_schedule(data_dir / "raw", 2025), 2025, 5,
                       n_sims=500, seed=0)
@@ -310,3 +312,78 @@ def test_results_fingerprint_ignores_row_order_and_other_seasons(data_dir):
     changed = results.copy()
     changed.loc[changed.index[-1], "points"] += 1
     assert fp != results_fingerprint(changed, 2025)
+
+
+def _miss_round(results, driver, rnd, reserve="reserve_x"):
+    """`driver` manque la manche `rnd` de 2025 : un réserviste prend son volant ce week-end."""
+    out = results.copy()
+    m = (out["season"] == 2025) & (out["round"] == rnd) & (out["driver_id"] == driver)
+    out.loc[m, ["driver_id", "driver_name", "points"]] = [reserve, "Reserve X", 0.0]
+    return out
+
+
+def test_regular_who_misses_the_last_race_keeps_a_real_forecast(data_dir):
+    # Repro r4 : un titulaire absent une seule course était traité comme parti pour de bon.
+    from f1pred.data import load_results, load_schedule
+    results = _miss_round(load_results(data_dir / "raw"), "d0", 5)
+    cp = predict_from(results, load_schedule(data_dir / "raw", 2025), 2025, 5,
+                      n_sims=500, seed=0)
+    validate(cp)
+    i = cp.state.drivers.index("d0")
+    assert cp.races[0].pred_pos[i] < 30
+    assert cp.races[0].p_dnf[i] < 1.0
+    assert cp.sim.expected_points["d0"] > cp.state.points[i]
+    # Le réserviste ne garde pas le baquet pour le reste de la saison.
+    j = cp.state.drivers.index("reserve_x")
+    assert cp.races[0].p_dnf[j] == 1.0
+    assert cp.sim.expected_points["reserve_x"] == pytest.approx(cp.state.points[j])
+
+
+def test_regular_who_missed_a_race_mid_window_keeps_his_seat(data_dir):
+    from f1pred.data import load_results, load_schedule
+    from f1pred.pipeline import forecast
+    results = _miss_round(load_results(data_dir / "raw"), "d3", 2)
+    fc = forecast(results, load_schedule(data_dir / "raw", 2025), 2025, 5)
+    assert set(fc.preds["driver_id"]) == {f"d{i}" for i in range(10)}
+
+
+def test_lineup_keeps_the_two_drivers_with_most_starts_in_the_last_five_gp():
+    from f1pred.pipeline import current_lineup
+    results = make_results(seasons=(2025,), n_rounds=6, sprint_rounds=())
+    # Chez t0 : d0 court les manches 1-3, "new" les manches 4-6. Fenêtre = manches 2-6 :
+    # d0 2 départs, new 3, d1 5.
+    m = (results["driver_id"] == "d0") & (results["round"] >= 4)
+    results.loc[m, ["driver_id", "driver_name"]] = ["new", "New"]
+    lineup = current_lineup(results, 2025, 6)
+    assert set(lineup.loc[lineup["constructor_id"] == "t0", "driver_id"]) == {"d1", "new"}
+    # d0 récupère la manche 4 : d0 3 départs (2-4), new 2 (5-6). Les départs priment.
+    m = (results["driver_id"] == "new") & (results["round"] == 4)
+    results.loc[m, ["driver_id", "driver_name"]] = ["d0", "Pilote 0"]
+    lineup = current_lineup(results, 2025, 6)
+    assert set(lineup.loc[lineup["constructor_id"] == "t0", "driver_id"]) == {"d1", "d0"}
+    assert len(lineup) == 10
+
+
+def test_lineup_tie_goes_to_most_recent_start():
+    from f1pred.pipeline import current_lineup
+    results = make_results(seasons=(2025,), n_rounds=4, sprint_rounds=())
+    # Chez t0, le volant de d1 passe à x (manches 1-2) puis à y (manches 3-4) : égalité
+    # 2-2 pour le 2e baquet, y a couru le plus récemment.
+    for rnd, who in [(1, "x"), (2, "x"), (3, "y"), (4, "y")]:
+        m = (results["driver_id"] == "d1") & (results["round"] == rnd)
+        results.loc[m, ["driver_id", "driver_name"]] = [who, who.upper()]
+    lineup = current_lineup(results, 2025, 4)
+    assert set(lineup.loc[lineup["constructor_id"] == "t0", "driver_id"]) == {"d0", "y"}
+
+
+def test_driver_who_changed_team_counts_only_for_his_current_team():
+    from f1pred.pipeline import current_lineup
+    results = make_results(seasons=(2025,), n_rounds=5, sprint_rounds=())
+    # d2 (t1) passe chez t0 à la manche 4 à la place de d1, qui prend son volant chez t1.
+    m2 = (results["driver_id"] == "d2") & (results["round"] >= 4)
+    m1 = (results["driver_id"] == "d1") & (results["round"] >= 4)
+    results.loc[m2, "constructor_id"] = "t0"
+    results.loc[m1, "constructor_id"] = "t1"
+    lineup = current_lineup(results, 2025, 5).set_index("driver_id")["constructor_id"]
+    assert lineup.index.is_unique
+    assert lineup["d2"] == "t0" and lineup["d1"] == "t1"
