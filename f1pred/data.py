@@ -129,7 +129,13 @@ def parse_schedule(payload: dict) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=SCHEDULE_COLUMNS)
 
 
-GRACE_DAYS = 2  # course le dimanche : le lundi reste strict, le mardi publie quand même
+SETTLE_WEEKDAY = 1  # mardi : le lundi qui suit la course reste strict, le mardi publie
+
+
+def settle_date(race_date: date) -> date:
+    """Premier mardi strictement après la course : J+2 un dimanche, J+3 un samedi."""
+    days = (SETTLE_WEEKDAY - race_date.weekday()) % 7 or 7
+    return race_date + timedelta(days=days)
 
 
 def drop_incomplete_rounds(results: pd.DataFrame, schedule: pd.DataFrame | None = None,
@@ -141,8 +147,8 @@ def drop_incomplete_rounds(results: pd.DataFrame, schedule: pd.DataFrame | None 
     lignes que le GP complet précédent et, si le calendrier en fait un week-end sprint,
     ses lignes de sprint. Les manches plus anciennes plus courtes (forfait réel) restent.
     Si `today` est donné, la dernière manche est aussi acceptée (avec MIN_RESULTS lignes)
-    dès que sa course date d'au moins GRACE_DAYS jours : plateau réduit, sprint annulé ou
-    dernière manche de la saison ne bloquent pas indéfiniment.
+    à partir du premier mardi qui suit sa course (`settle_date`) : plateau réduit, sprint
+    annulé ou dernière manche de la saison ne bloquent pas indéfiniment.
     """
     # astype(bool) : après concat avec un sprint vide, la colonne est en object et ~ casse.
     is_sprint = results["is_sprint"].astype(bool)
@@ -166,7 +172,7 @@ def drop_incomplete_rounds(results: pd.DataFrame, schedule: pd.DataFrame | None 
         if today is not None:
             raced = results.loc[(results["season"] == latest[0])
                                 & (results["round"] == latest[1]), "date"]
-            settled = pd.Timestamp(raced.max()).date() <= today - timedelta(days=GRACE_DAYS)
+            settled = today >= settle_date(pd.Timestamp(raced.max()).date())
         full = counts.iloc[-1] >= reference and (latest not in sprint_weekends or has_sprint)
         if full or settled:
             complete.add(latest)

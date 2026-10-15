@@ -311,6 +311,13 @@ def test_recent_short_round_is_still_held():
     assert set(drop_incomplete_rounds(df, today=date(2025, 12, 9))["round"]) == {1}
 
 
+def test_saturday_race_keeps_monday_strict():
+    # Course le samedi (Las Vegas) : le lundi reste strict, seul le mardi publie.
+    df = pd.DataFrame(_rows(2026, 1, 22, False) + _dated(_rows(2026, 2, 21, False), "2026-11-21"))
+    assert set(drop_incomplete_rounds(df, today=date(2026, 11, 23))["round"]) == {1}
+    assert set(drop_incomplete_rounds(df, today=date(2026, 11, 24))["round"]) == {1, 2}
+
+
 def test_client_refuses_redirects():
     # Une redirection (vers un autre hôte ou non) n'est jamais suivie : erreur immédiate.
     client = make_client([FakeResponse(302, {"MRData": {"total": "0"}})] * 3)
