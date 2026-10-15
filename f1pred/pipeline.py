@@ -7,8 +7,11 @@ from dataclasses import dataclass, replace
 from datetime import date
 from pathlib import Path
 
+import lightgbm as lgb
 import numpy as np
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 from f1pred.chrono import (
     CANCEL_GRACE_DAYS,
@@ -212,18 +215,59 @@ def _season_records(results: pd.DataFrame, season: int) -> list[pd.DataFrame]:
                              rnd) for rnd in rounds[:-1]]
 
 
+# À incrémenter dès que le modèle, les features, la prévision ou les résidus changent : le
+# cache des erreurs de prévision de la saison précédente est alors recalculé.
+CACHE_VERSION = 1
+_CACHE_KEY = b"f1pred_records_key"
+
+
+def _records_key(results: pd.DataFrame, season: int) -> str:
+    """Tout ce dont dépendent les erreurs de prévision de `season` : ses résultats et ceux
+    des saisons antérieures (le modèle s'entraîne dessus), le code et LightGBM."""
+    seasons = sorted(int(s) for s in results["season"].unique() if s <= season)
+    parts = [f"v{CACHE_VERSION}", f"lightgbm {lgb.__version__}",
+             *(f"{s}:{results_fingerprint(results, s)}" for s in seasons)]
+    return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
+
+
+def season_records(results: pd.DataFrame, season: int,
+                   cache_dir: Path | None = None) -> list[pd.DataFrame]:
+    """`_season_records`, mis en cache dans `cache_dir`/residuals_<season>.parquet.
+
+    Une saison passée ne change plus : sans le cache, chaque exécution réentraînait ses
+    ~23 checkpoints. Le cache n'est servi que si sa clé (`_records_key`) correspond.
+    """
+    if cache_dir is None:
+        return _season_records(results, season)
+    path = cache_dir / f"residuals_{season}.parquet"
+    key = _records_key(results, season).encode("ascii")
+    if path.exists() and (pq.read_schema(path).metadata or {}).get(_CACHE_KEY) == key:
+        return [pq.read_table(path).to_pandas()]
+    records = _season_records(results, season)
+    if records:
+        table = pa.Table.from_pandas(pd.concat(records, ignore_index=True), preserve_index=False)
+        table = table.replace_schema_metadata({**(table.schema.metadata or {}), _CACHE_KEY: key})
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        pq.write_table(table, tmp)
+        tmp.replace(path)
+    return records
+
+
 def season_checkpoints(results: pd.DataFrame, schedule: pd.DataFrame, season: int,
                        rounds: list[int], n_sims: int, seed: int,
                        n_sims_final: int | None = None,
-                       today: date | None = None) -> list[Checkpoint]:
+                       today: date | None = None,
+                       cache_dir: Path | None = None) -> list[Checkpoint]:
     """Un checkpoint par manche (`rounds` dans l'ordre chronologique) ; les chocs de la
     manche r n'utilisent que les courses déjà courues à la date de r.
 
     Les erreurs de prévision viennent de la saison précédente et des checkpoints déjà calculés
     de la saison en cours. La dernière manche, celle publiée, utilise `n_sims_final`
-    simulations et `today` pour repérer les manches annulées (voir `forecast`).
+    simulations et `today` pour repérer les manches annulées (voir `forecast`). Les erreurs
+    de la saison précédente sont mises en cache dans `cache_dir` (voir `season_records`).
     """
-    records = _season_records(results, season - 1)
+    records = season_records(results, season - 1, cache_dir)
     checkpoints = []
     for rnd in rounds:
         fc = forecast(results, schedule, season, rnd, today if rnd == rounds[-1] else None)
@@ -401,7 +445,7 @@ def run(data_dir: Path, out_dir: Path, offline: bool, seed: int = 0, n_sims: int
                        + warning)
 
     checkpoints = season_checkpoints(results, schedule, season, rounds, n_sims, seed,
-                                     n_sims_final, today)
+                                     n_sims_final, today, cache_dir=data_dir)
     for cp in checkpoints:
         validate(cp)
         history = upsert(history, _history_entry(cp, season, schedule))

@@ -547,3 +547,52 @@ def test_past_checkpoint_ignores_unraced_rounds_dated_before_it():
     sched = make_schedule(2025, 8)
     assert [r.round for r in forecast(results, sched, 2025, 7).races] == [8]
     assert [r.round for r in forecast(results, sched, 2025, 5).races] == [6, 7, 8]
+
+
+def _records_frame(records):
+    return pd.concat(records, ignore_index=True)
+
+
+def test_previous_season_records_are_cached(data_dir, monkeypatch):
+    import f1pred.pipeline as pl
+    from f1pred.data import load_results
+    results = load_results(data_dir / "raw")
+    fresh = _records_frame(pl._season_records(results, 2024))
+    cached = _records_frame(pl.season_records(results, 2024, data_dir))
+    pd.testing.assert_frame_equal(cached, fresh)
+    assert (data_dir / "residuals_2024.parquet").exists()
+
+    def boom(*a, **k):
+        raise AssertionError("recalcul inutile")
+    monkeypatch.setattr(pl, "_season_records", boom)
+    pd.testing.assert_frame_equal(_records_frame(pl.season_records(results, 2024, data_dir)),
+                                  fresh)
+
+
+@pytest.mark.parametrize("change", ["season", "earlier_season", "version"])
+def test_records_cache_is_recomputed_when_its_inputs_change(data_dir, monkeypatch, change):
+    import f1pred.pipeline as pl
+    from f1pred.data import load_results
+    results = load_results(data_dir / "raw")
+    pl.season_records(results, 2024, data_dir)
+    if change == "version":
+        monkeypatch.setattr(pl, "CACHE_VERSION", pl.CACHE_VERSION + 1)
+    else:
+        season = 2024 if change == "season" else 2023
+        results = results.copy()
+        results.loc[results.index[results["season"] == season][0], "points"] += 1
+    calls = []
+    real = pl._season_records
+    monkeypatch.setattr(pl, "_season_records", lambda *a: calls.append(1) or real(*a))
+    pl.season_records(results, 2024, data_dir)
+    assert calls == [1]
+    pl.season_records(results, 2024, data_dir)
+    assert calls == [1]  # le cache réécrit sert ensuite
+
+
+def test_run_uses_the_records_cache_with_identical_output(data_dir, tmp_path):
+    _small_run(data_dir, tmp_path)
+    first = (data_dir / "history.json").read_text(encoding="utf-8")
+    assert (data_dir / "residuals_2024.parquet").exists()
+    _small_run(data_dir, tmp_path, force=True)
+    assert (data_dir / "history.json").read_text(encoding="utf-8") == first

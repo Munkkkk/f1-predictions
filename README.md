@@ -23,6 +23,10 @@ uv run pytest
   Pages, seulement s'il y a eu du nouveau.
 - Hors saison, si le dernier commit date de plus de 45 jours, `build` pousse un commit vide
   `chore: keepalive` pour que GitHub ne désactive pas le cron.
+- `data/residuals_<saison>.parquet` (versionné, quelques dizaines de Ko) met en cache les
+  erreurs de prévision de la saison précédente, figée : il est recalculé de lui-même si les
+  résultats changent, ou si `CACHE_VERSION` (`f1pred/pipeline.py`) est incrémenté — à faire
+  à chaque modification du modèle, des features ou de la prévision.
 - `.github/workflows/test.yml` : ruff + pytest à chaque push et à chaque pull request.
 - Le cron et l'environnement `github-pages` ne fonctionnent que sur la branche par défaut.
 
