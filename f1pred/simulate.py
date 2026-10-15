@@ -14,6 +14,7 @@ class RaceInput:
     pred_pos: np.ndarray
     p_dnf: np.ndarray
     is_sprint: bool
+    round: int | None = None  # manche du calendrier (pour comparer aux résultats réels)
 
 
 @dataclass

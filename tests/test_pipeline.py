@@ -130,6 +130,35 @@ def test_backtest_metrics_are_finite(data_dir):
     assert 0 < m["brier_winner_baseline"] < 1
 
 
+def test_backtest_scores_the_next_gp_against_its_own_round():
+    # Le prochain GP prévu est la manche 7 (une manche reportée passe avant la 6, par exemple) :
+    # il doit être comparé aux résultats de la manche 7, pas de la manche cp.round + 1.
+    from types import SimpleNamespace
+
+    from f1pred.pipeline import backtest_metrics
+    from f1pred.simulate import RaceInput
+    results = make_results(seasons=(2025,), n_rounds=8, sprint_rounds=())
+    gp7 = results[results["round"] == 7].set_index("driver_id")
+    drivers = sorted(results["driver_id"].unique())
+    pred = gp7.loc[drivers, "position"].to_numpy(dtype=float)  # prévision parfaite de la 7
+    race = RaceInput(pred_pos=pred, p_dnf=np.zeros(len(drivers)), is_sprint=False, round=7)
+    cp = SimpleNamespace(round=5, races=[race], sigma=0.01,
+                         state=SimpleNamespace(drivers=drivers))
+    m = backtest_metrics([cp], results, 2025, n_sims=200, seed=0)
+    winner_7 = gp7.loc[drivers]
+    assert m["n_races"] == 1
+    if bool(winner_7.loc[winner_7["position"] == 1, "finished"].iloc[0]):
+        assert m["brier_winner"] == pytest.approx(0.0, abs=1e-9)
+    assert m["brier_podium"] < 0.05
+
+
+def test_forecast_tags_each_race_with_its_round(data_dir):
+    from f1pred.data import load_results, load_schedule
+    from f1pred.pipeline import forecast
+    fc = forecast(load_results(data_dir / "raw"), load_schedule(data_dir / "raw", 2025), 2025, 5)
+    assert [r.round for r in fc.races] == [6, 7, 8]
+
+
 def test_predict_from_complete_season_is_decided(tmp_path):
     results = make_results(seasons=(2024, 2025), n_rounds=8)
     cp = predict_from(results, make_schedule(2025, 8), 2025, 8, n_sims=200, seed=0)

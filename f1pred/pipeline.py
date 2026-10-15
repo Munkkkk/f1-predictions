@@ -140,6 +140,7 @@ def forecast(results: pd.DataFrame, schedule: pd.DataFrame, season: int,
                 pred_pos=p["pred_pos"].fillna(ABSENT_POSITION).to_numpy(dtype=float),
                 p_dnf=p["p_dnf"].fillna(1.0).to_numpy(dtype=float),
                 is_sprint=False,
+                round=int(race.round),
             )
             if race.has_sprint:
                 races.append(replace(gp_input, is_sprint=True))
@@ -246,9 +247,11 @@ def backtest_metrics(checkpoints: list[Checkpoint], results: pd.DataFrame, seaso
     gp = results[(results["season"] == season) & ~results["is_sprint"].astype(bool)]
     bw, bw0, bp, bp0 = [], [], [], []
     for cp in checkpoints:
-        nxt = gp[gp["round"] == cp.round + 1]
         next_gp = next((r for r in cp.races if not r.is_sprint), None)
-        if nxt.empty or next_gp is None:
+        if next_gp is None or next_gp.round is None:
+            continue
+        nxt = gp[gp["round"] == next_gp.round]
+        if nxt.empty:
             continue
         drivers = cp.state.drivers
         win, podium = race_finish_probs(next_gp, cp.sigma, n_sims=n_sims, seed=seed)
