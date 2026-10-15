@@ -138,3 +138,22 @@ def test_postponed_round_raced_later_is_ordered_by_date():
     assert form[4] == pytest.approx((pos[1] + pos[2]) / 2)
     assert form[3] == pytest.approx((pos[2] + pos[4] + pos[5]) / 3)
     assert form[6] == pytest.approx((pos[4] + pos[5] + pos[3]) / 3)
+
+
+def test_unraced_round_between_known_rounds_takes_no_window_slot():
+    # Manche 3 au calendrier entre la 2 et la 4 mais pas courue (lignes futures, position
+    # inconnue) : la fenêtre des manches courues suivantes ne compte que des résultats réels.
+    rows = []
+    for rnd, pos in [(1, 2), (2, 4), (3, None), (4, 6), (5, 8)]:
+        for drv, p in (("a", pos), ("b", None if pos is None else pos + 1)):
+            rows.append(dict(season=2026, round=rnd, race_name="GP", date=f"2026-01-0{rnd}",
+                             circuit_id=f"c{rnd}", driver_id=drv, driver_name=drv.upper(),
+                             constructor_id="t", position=p,
+                             points=None if p is None else 0.0,
+                             finished=None if p is None else True, is_sprint=False))
+    feats = build_features(pd.DataFrame(rows))
+    a = feats[feats["driver_id"] == "a"].set_index("round")
+    assert a.loc[4, "drv_form3"] == pytest.approx((2 + 4) / 2)
+    assert a.loc[5, "drv_form3"] == pytest.approx((2 + 4 + 6) / 3)
+    assert a.loc[3, "drv_form3"] == pytest.approx((2 + 4) / 2)  # valeur connue à ce moment
+    assert a.loc[5, "team_form5"] == pytest.approx((2.5 + 4.5 + 6.5) / 3)
