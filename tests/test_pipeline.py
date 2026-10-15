@@ -1,3 +1,4 @@
+import json
 from datetime import date
 
 import numpy as np
@@ -460,3 +461,38 @@ def test_validate_rejects_bad_shocks(data_dir, field, value):
     cp.shocks = replace(cp.shocks, **{field: value})
     with pytest.raises(ValidationError, match=field):
         validate(cp)
+
+
+def _postpone_round_3(data_dir):
+    """Manche 3 courue une semaine après la 5 (calendrier mis à jour), sous son numéro."""
+    from tests.test_chrono import postponed
+    raw = data_dir / "raw"
+    postponed(pd.read_parquet(raw / "results_2025.parquet")).to_parquet(
+        raw / "results_2025.parquet", index=False)
+    sched = pd.read_parquet(raw / "schedule_2025.parquet")
+    postponed(sched).to_parquet(raw / "schedule_2025.parquet", index=False)
+
+
+def test_round_raced_late_is_unknown_at_earlier_checkpoints(data_dir):
+    from f1pred.data import load_results, load_schedule
+    from f1pred.pipeline import forecast
+    _postpone_round_3(data_dir)
+    results, sched = load_results(data_dir / "raw"), load_schedule(data_dir / "raw", 2025)
+    fc = forecast(results, sched, 2025, 4)
+    cur = results[(results["season"] == 2025) & results["round"].isin([1, 2, 4])]
+    expected = cur.groupby("driver_id")["points"].sum().reindex(fc.state.drivers).fillna(0)
+    assert fc.state.points.tolist() == expected.round().astype(int).tolist()
+    assert fc.state.last_round == 4
+    assert [r.round for r in fc.races if not r.is_sprint] == [5, 3, 6, 7, 8]
+    assert [r.round for r in fc.races if r.is_sprint] == [3]
+    assert forecast(results, sched, 2025, 3).state.last_round == 3
+
+
+def test_run_publishes_the_most_recently_raced_round(data_dir, tmp_path):
+    _postpone_round_3(data_dir)
+    out = _small_run(data_dir, tmp_path)
+    assert out.updated is True and "manche 3" in out.message
+    state = json.loads((data_dir / "state.json").read_text(encoding="utf-8"))
+    assert state["round"] == 3
+    rounds = [e["round"] for e in load_history(data_dir / "history.json")]
+    assert rounds == [1, 2, 4, 5, 3]

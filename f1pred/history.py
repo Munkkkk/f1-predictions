@@ -13,7 +13,8 @@ def load_history(path: Path) -> list[dict]:
 def upsert(history: list[dict], entry: dict) -> list[dict]:
     key = (entry["season"], entry["round"])
     kept = [e for e in history if (e["season"], e["round"]) != key]
-    return sorted([*kept, entry], key=lambda e: (e["season"], e["round"]))
+    # Ordre chronologique : une manche reportée se place à sa date de course.
+    return sorted([*kept, entry], key=lambda e: (e["season"], e.get("date", ""), e["round"]))
 
 
 def save_history(path: Path, history: list[dict]) -> None:

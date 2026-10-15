@@ -10,6 +10,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from f1pred.chrono import known_rounds, race_order
 from f1pred.data import RESULT_COLUMNS, JolpicaClient, load_results, load_schedule, update_cache
 from f1pred.features import add_future_rows, build_features
 from f1pred.history import load_history, save_history, upsert
@@ -76,7 +77,10 @@ class Outcome:
 def season_state(results: pd.DataFrame, season: int) -> SeasonState:
     cur = results[results["season"] == season]
     drivers = sorted(cur["driver_id"].unique())
-    latest = cur.sort_values(["round", "is_sprint"]).drop_duplicates("driver_id", keep="last")
+    order = race_order(cur, season)
+    rank = cur["round"].map({r: i for i, r in enumerate(order)})
+    latest = (cur.assign(_t=rank).sort_values(["_t", "is_sprint"])
+              .drop_duplicates("driver_id", keep="last"))
     names = dict(zip(latest["driver_id"], latest["driver_name"], strict=True))
     teams = dict(zip(latest["driver_id"], latest["constructor_id"], strict=True))
     points = (cur.groupby("driver_id")["points"].sum().reindex(drivers).fillna(0)
@@ -87,7 +91,7 @@ def season_state(results: pd.DataFrame, season: int) -> SeasonState:
         positions = gp.loc[gp["driver_id"] == driver, "position"].astype(int)
         for k in range(COUNTBACK_DEPTH):
             countback[i, k] = int((positions == k + 1).sum())
-    return SeasonState(drivers, names, teams, points, countback, int(cur["round"].max()))
+    return SeasonState(drivers, names, teams, points, countback, order[-1])
 
 
 LINEUP_WINDOW = 5  # GP récents qui fixent les titulaires de chaque écurie
@@ -101,14 +105,17 @@ def current_lineup(results: pd.DataFrame, season: int, upto_round: int) -> pd.Da
     Un titulaire absent une course garde son baquet ; un réserviste d'un week-end ne le garde
     pas. Un pilote ne compte que pour sa dernière écurie.
     """
-    gp = results[(results["season"] == season) & (results["round"] <= upto_round)
+    known = known_rounds(results, season, upto_round)
+    gp = results[(results["season"] == season) & results["round"].isin(known)
                  & ~results["is_sprint"].astype(bool)]
-    window = sorted(gp["round"].unique())[-LINEUP_WINDOW:]
-    gp = gp[gp["round"].isin(window)].sort_values("round")
+    window = [r for r in known if r in set(gp["round"])][-LINEUP_WINDOW:]
+    rank = {r: i for i, r in enumerate(window)}
+    gp = gp[gp["round"].isin(window)]
+    gp = gp.assign(_t=gp["round"].map(rank)).sort_values("_t")
     latest = gp.drop_duplicates("driver_id", keep="last").set_index("driver_id")
     gp = gp[gp["constructor_id"].to_numpy()
             == latest.loc[gp["driver_id"], "constructor_id"].to_numpy()]
-    starts = (gp.groupby("driver_id")["round"].agg(starts="count", last="max")
+    starts = (gp.groupby("driver_id")["_t"].agg(starts="count", last="max")
               .join(latest[["driver_name", "constructor_id"]]).reset_index())
     starts = starts.sort_values(["starts", "last", "driver_id"], ascending=[False, False, True])
     lineup = starts.groupby("constructor_id", sort=False).head(SEATS_PER_TEAM)
@@ -117,13 +124,19 @@ def current_lineup(results: pd.DataFrame, season: int, upto_round: int) -> pd.Da
 
 def forecast(results: pd.DataFrame, schedule: pd.DataFrame, season: int,
              upto_round: int) -> Forecast:
-    """Entraîne le modèle sur les données connues après `upto_round` et prévoit la suite."""
+    """Entraîne le modèle sur les données connues après `upto_round` et prévoit la suite.
+
+    Connues : les manches courues au plus tard à la date de `upto_round` (ordre
+    chronologique, pas l'ordre des numéros).
+    """
+    known = known_rounds(results, season, upto_round)
     past = results[(results["season"] < season)
-                   | ((results["season"] == season) & (results["round"] <= upto_round))]
+                   | ((results["season"] == season) & results["round"].isin(known))]
     state = season_state(past, season)
     lineup = current_lineup(past, season, upto_round)
-    raced = past.loc[past["season"] == season, "round"].unique()
-    future = schedule[~schedule["round"].isin(raced)].sort_values("round")  # reports inclus
+    future = schedule[~schedule["round"].isin(known)]  # reports inclus
+    future = (future.assign(_t=pd.to_datetime(future["date"]))
+              .sort_values(["_t", "round"], kind="stable").drop(columns="_t"))
 
     races: list[RaceInput] = []
     sigma = DEFAULT_SIGMA
@@ -182,7 +195,7 @@ def _season_records(results: pd.DataFrame, season: int) -> list[pd.DataFrame]:
     if not (results["season"] == season).any():
         return []
     schedule = _schedule_from_results(results, season)
-    rounds = schedule["round"].tolist()
+    rounds = race_order(results, season)
     return [residual_records(forecast(results, schedule, season, rnd).preds, results, season,
                              rnd) for rnd in rounds[:-1]]
 
@@ -190,7 +203,8 @@ def _season_records(results: pd.DataFrame, season: int) -> list[pd.DataFrame]:
 def season_checkpoints(results: pd.DataFrame, schedule: pd.DataFrame, season: int,
                        rounds: list[int], n_sims: int, seed: int,
                        n_sims_final: int | None = None) -> list[Checkpoint]:
-    """Un checkpoint par manche ; les chocs de la manche r n'utilisent que les courses <= r.
+    """Un checkpoint par manche (`rounds` dans l'ordre chronologique) ; les chocs de la
+    manche r n'utilisent que les courses déjà courues à la date de r.
 
     Les erreurs de prévision viennent de la saison précédente et des checkpoints déjà calculés
     de la saison en cours. La dernière manche utilise `n_sims_final` simulations.
@@ -201,7 +215,8 @@ def season_checkpoints(results: pd.DataFrame, schedule: pd.DataFrame, season: in
         fc = forecast(results, schedule, season, rnd)
         shocks = None
         if records:
-            pool = usable_records(pd.concat(records, ignore_index=True), season, rnd)
+            pool = usable_records(pd.concat(records, ignore_index=True), season,
+                                  known_rounds(results, season, rnd))
             shocks = estimate_shocks(pool, fallback_sigma=fc.sigma)
         sims = n_sims_final if rnd == rounds[-1] and n_sims_final else n_sims
         checkpoints.append(simulate_forecast(fc, sims, seed, shocks))
@@ -231,7 +246,7 @@ def check_contiguous(rounds: list[int], schedule: pd.DataFrame, season: int) -> 
     n'est qu'un avertissement : la prévision la garde à venir. Une manche courue absente du
     calendrier, ou un trou que le calendrier n'explique pas, reste une erreur.
     """
-    last = rounds[-1]
+    last = max(rounds)
     scheduled = {int(r) for r in schedule["round"]}
     missing = sorted(set(range(1, last + 1)) - set(rounds))
     unexplained = sorted((set(rounds) - scheduled) | (set(missing) - scheduled))
@@ -346,7 +361,7 @@ def run(data_dir: Path, out_dir: Path, offline: bool, seed: int = 0, n_sims: int
     results = load_results(raw)
     season = today.year if (results["season"] == today.year).any() else today.year - 1
     schedule = load_schedule(raw, season)
-    rounds = sorted(int(r) for r in results.loc[results["season"] == season, "round"].unique())
+    rounds = race_order(results, season)  # chronologique : `last` est la plus récente
     last = rounds[-1]
     postponed = check_contiguous(rounds, schedule, season)
     warning = ""

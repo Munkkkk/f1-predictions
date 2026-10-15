@@ -8,10 +8,13 @@ simulation). On compare ces prévisions aux résultats réels, puis on décompos
 par la méthode des moments sur des groupes emboîtés (checkpoint, écurie, pilote).
 """
 
+from collections.abc import Collection
 from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
+
+from f1pred.chrono import rounds_after
 
 HORIZON = 6  # courses prévues à partir de chaque checkpoint
 MIN_ROWS = 3  # courses minimales par (checkpoint, pilote) pour entrer dans l'estimation
@@ -31,9 +34,10 @@ class Shocks:
 
 def residual_records(preds: pd.DataFrame, results: pd.DataFrame, season: int,
                      checkpoint: int, horizon: int = HORIZON) -> pd.DataFrame:
-    """Associe les prévisions faites après `checkpoint` aux GP réellement courus ensuite."""
+    """Associe les prévisions faites après `checkpoint` aux `horizon` GP courus ensuite."""
+    targets = rounds_after(results, season, checkpoint, horizon)
     gp = results[(results["season"] == season) & ~results["is_sprint"].astype(bool)
-                 & (results["round"] > checkpoint) & (results["round"] <= checkpoint + horizon)]
+                 & results["round"].isin(targets)]
     rec = preds[["round", "driver_id", "pred_pos", "p_dnf"]].merge(
         gp[["round", "driver_id", "constructor_id", "position", "finished"]],
         on=["round", "driver_id"], how="inner")
@@ -43,9 +47,9 @@ def residual_records(preds: pd.DataFrame, results: pd.DataFrame, season: int,
     return rec[RECORD_COLUMNS].reset_index(drop=True)
 
 
-def usable_records(records: pd.DataFrame, season: int, upto_round: int) -> pd.DataFrame:
-    """Paires (checkpoint, course) connues après la manche `upto_round` de `season`."""
-    return records[(records["season"] < season) | (records["round"] <= upto_round)]
+def usable_records(records: pd.DataFrame, season: int, known: Collection[int]) -> pd.DataFrame:
+    """Paires (checkpoint, course) dont la course de `season` est déjà courue (`known`)."""
+    return records[(records["season"] < season) | records["round"].isin(list(known))]
 
 
 def _form_shocks(fin: pd.DataFrame) -> tuple[float, float]:

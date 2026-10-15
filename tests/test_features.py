@@ -126,3 +126,15 @@ def test_past_solo_rows_keep_teammate_delta_rule():
     feats = build_features(pd.DataFrame(rows))
     a = feats[feats["driver_id"] == "a"].set_index("round")["teammate_delta"]
     assert a.tolist() == pytest.approx([0.0, -2.0, -2.0, -2.0])
+
+
+def test_postponed_round_raced_later_is_ordered_by_date():
+    # La manche 3 est courue après la 5 : la forme de la 4 l'ignore, celle de la 3 inclut 4 et 5.
+    from tests.test_chrono import postponed
+    results = postponed(make_results(seasons=(2025,), n_rounds=6, sprint_rounds=()))
+    feats = build_features(results)
+    pos = results[results["driver_id"] == "d0"].set_index("round")["position"].astype(float)
+    form = feats[feats["driver_id"] == "d0"].set_index("round")["drv_form3"]
+    assert form[4] == pytest.approx((pos[1] + pos[2]) / 2)
+    assert form[3] == pytest.approx((pos[2] + pos[4] + pos[5]) / 3)
+    assert form[6] == pytest.approx((pos[4] + pos[5] + pos[3]) / 3)

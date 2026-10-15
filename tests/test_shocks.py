@@ -63,7 +63,7 @@ def test_usable_records_never_include_races_after_checkpoint():
     prev = planted(n_ckpt=3).assign(season=2025)
     cur = planted(n_ckpt=8).assign(season=2026)
     rec = pd.concat([prev, cur], ignore_index=True)
-    used = usable_records(rec, season=2026, upto_round=5)
+    used = usable_records(rec, season=2026, known=range(1, 6))
     assert (used.loc[used["season"] == 2026, "round"] <= 5).all()
     assert (used.loc[used["season"] == 2026, "checkpoint"] < 5).all()
     assert len(used[used["season"] == 2025]) == len(prev)
@@ -72,13 +72,35 @@ def test_usable_records_never_include_races_after_checkpoint():
 def test_residual_records_pair_forecasts_with_actual_results():
     preds = pd.DataFrame({"round": [6, 6, 7, 13], "driver_id": ["a", "b", "a", "a"],
                           "pred_pos": [2.0, 5.0, 3.0, 1.0], "p_dnf": [0.1, 0.2, 0.1, 0.1]})
+    rounds = [5, 6, 6, 6, 7, *range(8, 14)]
     results = pd.DataFrame({
-        "season": 2026, "round": [6, 6, 6, 7, 13], "driver_id": ["a", "b", "a", "a", "a"],
-        "constructor_id": "t", "position": [4, 9, 1, 3, 1],
-        "finished": [True, False, True, True, True], "is_sprint": [False, False, True, False,
-                                                                   False]})
+        "season": 2026, "round": rounds, "date": [f"2026-05-{r:02d}" for r in rounds],
+        "driver_id": ["a", "a", "b", "a", "a", *["a"] * 6],
+        "constructor_id": "t", "position": [1, 4, 9, 1, 3, *[1] * 6],
+        "finished": [True, True, False, True, True, *[True] * 6],
+        "is_sprint": [False, False, False, True, False, *[False] * 6]})
     rec = residual_records(preds, results, season=2026, checkpoint=5)
     assert list(rec["round"]) == [6, 6, 7]  # manche 13 hors horizon, sprint ignoré
     assert list(rec["resid"]) == [2.0, 4.0, 0.0]
     assert list(rec["finished"]) == [True, False, True]
     assert set(rec["checkpoint"]) == {5} and set(rec["team"]) == {"t"}
+
+
+def test_residual_records_follow_race_dates():
+    # La manche 7, reportée, est courue après la 9 : après la manche 8, l'horizon de 2 courses
+    # couvre 9 et 7 ; après la 9, seulement la 7.
+    preds = pd.DataFrame({"round": [7, 9, 10], "driver_id": "a", "pred_pos": 1.0,
+                          "p_dnf": 0.1})
+    rounds, days = [6, 7, 8, 9, 10], [1, 20, 8, 15, 27]
+    results = pd.DataFrame({"season": 2026, "round": rounds,
+                            "date": [f"2026-05-{d:02d}" for d in days], "driver_id": "a",
+                            "constructor_id": "t", "position": 2, "finished": True,
+                            "is_sprint": False})
+    assert list(residual_records(preds, results, 2026, 8, horizon=2)["round"]) == [7, 9]
+    assert list(residual_records(preds, results, 2026, 9, horizon=1)["round"]) == [7]
+
+
+def test_usable_records_keep_only_known_races():
+    rec = planted(n_ckpt=4).assign(season=2026)
+    used = usable_records(rec, season=2026, known=[1, 2, 4])
+    assert set(used["round"]) == {1, 2, 4}

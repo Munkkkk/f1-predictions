@@ -3,6 +3,7 @@
 import numpy as np
 import pandas as pd
 
+from f1pred.chrono import race_index
 from f1pred.data import RESULT_COLUMNS
 
 FEATURE_COLUMNS = [
@@ -49,10 +50,10 @@ def _past_rolling(df: pd.DataFrame, by, col: str, window: int) -> pd.Series:
 
 
 def build_features(results: pd.DataFrame) -> pd.DataFrame:
-    gp = results[~results["is_sprint"].astype(bool)].copy()
-    gp = gp.sort_values(["season", "round", "driver_id"]).reset_index(drop=True)
+    races = race_index(results)  # ordre chronologique : une manche reportée passe à sa date
+    gp = results[~results["is_sprint"].astype(bool)].merge(races, on=["season", "round"])
+    gp = gp.sort_values(["race_idx", "driver_id"]).reset_index(drop=True)
     gp["position"] = gp["position"].astype(float)
-    gp["race_idx"] = gp.groupby(["season", "round"], sort=True).ngroup()
 
     gp["drv_form3"] = _past_rolling(gp, "driver_id", "position", 3)
     gp["drv_form5"] = _past_rolling(gp, "driver_id", "position", 5)
@@ -78,9 +79,10 @@ def build_features(results: pd.DataFrame) -> pd.DataFrame:
 
     pts = (results.assign(points=results["points"].fillna(0.0))
            .groupby(["season", "round", "driver_id"], as_index=False)["points"].sum()
-           .sort_values(["season", "round"]))
+           .merge(races, on=["season", "round"]).sort_values("race_idx"))
     pts["drv_before"] = pts.groupby(["season", "driver_id"])["points"].cumsum() - pts["points"]
-    totals = pts.groupby(["season", "round"], as_index=False)["points"].sum()
+    totals = (pts.groupby(["season", "round", "race_idx"], as_index=False)["points"].sum()
+              .sort_values("race_idx"))
     totals["total_before"] = totals.groupby("season")["points"].cumsum() - totals["points"]
     pts = pts.merge(totals[["season", "round", "total_before"]], on=["season", "round"])
     pts["points_share"] = np.where(
