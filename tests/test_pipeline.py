@@ -22,6 +22,8 @@ def write_raw(raw, results, schedules):
 @pytest.fixture
 def data_dir(tmp_path):
     past = make_results(seasons=(2023, 2024), n_rounds=8)
+    # 2025 : manches 1-5 courues (la 5 le 10 mai), 6-8 à venir (dès le 24 mai). Les tests
+    # tournent le 13 mai : aucune manche du calendrier n'y est encore jugée annulée.
     current = make_results(seasons=(2025,), n_rounds=5, seed=3)
     results = pd.concat([past, current], ignore_index=True)
     write_raw(tmp_path / "data" / "raw", results,
@@ -83,7 +85,7 @@ def test_validate_rejects_bad_probabilities(data_dir):
 
 def test_run_offline_builds_site_then_skips(data_dir, tmp_path):
     out = tmp_path / "site"
-    small = dict(offline=True, n_sims=300, n_sims_final=300, today=date(2025, 6, 1))
+    small = dict(offline=True, n_sims=300, n_sims_final=300, today=date(2025, 5, 13))
     first = run(data_dir, out, **small)
     assert first.updated is True
     index = (out / "index.html").read_text(encoding="utf-8")
@@ -112,7 +114,7 @@ def test_cli_writes_github_output(data_dir, tmp_path, monkeypatch):
     gh_out = tmp_path / "gh_output"
     monkeypatch.setenv("GITHUB_OUTPUT", str(gh_out))
     monkeypatch.setattr("f1pred.cli.date", type("D", (), {"today": staticmethod(
-        lambda: date(2025, 6, 1))}))
+        lambda: date(2025, 5, 13))}))
     code = main(["run", "--offline", "--sims", "200", "--sims-final", "200",
                  "--data-dir", str(data_dir), "--out", str(tmp_path / "site")])
     assert code == 0
@@ -186,7 +188,7 @@ def test_context_reports_remaining_points_and_eliminations(data_dir):
     results = load_results(data_dir / "raw")
     sched = make_schedule(2025, 8, sprint_rounds=(3, 7))
     cp = predict_from(results, sched, 2025, 5, n_sims=200, seed=0)
-    ctx = _context(cp, 2025, [], {}, sched, 200, date(2025, 6, 1), 2023)
+    ctx = _context(cp, 2025, [], {}, sched, 200, date(2025, 5, 13), 2023)
     assert (ctx["remaining_gp"], ctx["remaining_sprints"]) == (3, 1)
     assert ctx["remaining_points"] == 25 * 3 + 8 * 1
     leader = max(cp.state.points)
@@ -221,7 +223,7 @@ def test_final_checkpoint_uses_more_simulations(data_dir, tmp_path, monkeypatch)
     monkeypatch.setattr(pl, "simulate_forecast", spy)
     monkeypatch.setattr(pl, "render_site", lambda out, ctx: contexts.append(ctx))
     run(data_dir, tmp_path / "site", offline=True, n_sims=200, n_sims_final=400,
-        today=date(2025, 6, 1))
+        today=date(2025, 5, 13))
     assert calls == [(1, 200), (2, 200), (3, 200), (4, 200), (5, 400)]
     assert contexts[0]["n_sims"] == 400
 
@@ -265,7 +267,7 @@ def test_context_sorts_drivers_like_the_standings(data_dir):
     a, b = cp.state.drivers[i], cp.state.drivers[j]
     cp.sim.p_title.update({d: 0.0 for d in cp.sim.p_title})
     cp.sim.p_title.update({a: 0.7, b: 0.3})
-    ctx = _context(cp, 2025, [], {}, sched, 300, date(2025, 6, 1), 2023)
+    ctx = _context(cp, 2025, [], {}, sched, 300, date(2025, 5, 13), 2023)
     order = [d["driver_id"] for d in ctx["drivers"]]
     assert order[:2] == [b, a]  # points d'abord, puis probabilité de titre
     points = [d["points"] for d in ctx["drivers"]]
@@ -303,28 +305,50 @@ def test_run_refuses_a_round_gap_absent_from_the_schedule(data_dir, tmp_path):
     sched[sched["round"] != 3].to_parquet(raw / "schedule_2025.parquet", index=False)
     with pytest.raises(ValidationError, match="3"):
         run(data_dir, tmp_path / "site", offline=True, n_sims=100, n_sims_final=100,
-            today=date(2025, 6, 1))
+            today=date(2025, 5, 13))
     assert not (data_dir / "history.json").exists()
     assert not (tmp_path / "site").exists()
 
 
 def test_run_warns_about_a_postponed_round(data_dir, tmp_path, caplog):
     # Repro I2 : une manche reportée (encore au calendrier) bloquait toute exécution.
+    # Reportée = le calendrier lui donne une nouvelle date, à venir.
     raw = data_dir / "raw"
     cur = pd.read_parquet(raw / "results_2025.parquet")
     cur[cur["round"] != 3].to_parquet(raw / "results_2025.parquet", index=False)
+    _move_round(raw, 3, "2025-06-08")
     with caplog.at_level("WARNING", logger="f1pred.pipeline"):
         out = run(data_dir, tmp_path / "site", offline=True, n_sims=100, n_sims_final=100,
-                  today=date(2025, 6, 1))
+                  today=date(2025, 5, 13))
     assert out.updated is True
     assert "3" in out.message and "non courue" in out.message
+    assert "annulée" not in out.message
     assert any("non courue" in r.getMessage() for r in caplog.records)
     assert (tmp_path / "site" / "index.html").exists()
 
 
+def _move_round(raw, rnd, day):
+    sched = pd.read_parquet(raw / "schedule_2025.parquet")
+    sched.loc[sched["round"] == rnd, "date"] = day
+    sched.to_parquet(raw / "schedule_2025.parquet", index=False)
+
+
+def test_run_treats_a_long_unraced_round_as_cancelled(data_dir, tmp_path, caplog):
+    # Manche 4 jamais courue, encore au calendrier à sa date d'origine (26 avril) : plus de
+    # 7 jours après, elle n'est plus une course à venir.
+    raw = data_dir / "raw"
+    cur = pd.read_parquet(raw / "results_2025.parquet")
+    cur[cur["round"] != 4].to_parquet(raw / "results_2025.parquet", index=False)
+    with caplog.at_level("WARNING", logger="f1pred.pipeline"):
+        out = _small_run(data_dir, tmp_path)
+    assert out.updated is True
+    assert "[4]" in out.message and "annulée" in out.message
+    assert any("annulée" in r.getMessage() for r in caplog.records)
+
+
 def _small_run(data_dir, tmp_path, **kw):
     return run(data_dir, tmp_path / "site", offline=True, n_sims=100, n_sims_final=100,
-               today=date(2025, 6, 1), **kw)
+               today=date(2025, 5, 13), **kw)
 
 
 def test_run_recomputes_after_a_correction_of_the_last_round(data_dir, tmp_path):
@@ -441,6 +465,7 @@ def test_postponed_round_stays_in_the_future(data_dir):
     from f1pred.data import load_results, load_schedule
     results = load_results(data_dir / "raw")
     results = results[~((results["season"] == 2025) & (results["round"] == 3))]
+    _move_round(data_dir / "raw", 3, "2025-05-17")  # nouvelle date, après la manche 5
     cp = predict_from(results, load_schedule(data_dir / "raw", 2025), 2025, 5,
                       n_sims=200, seed=0)
     validate(cp)
@@ -496,3 +521,29 @@ def test_run_publishes_the_most_recently_raced_round(data_dir, tmp_path):
     assert state["round"] == 3
     rounds = [e["round"] for e in load_history(data_dir / "history.json")]
     assert rounds == [1, 2, 4, 5, 3]
+
+
+def test_final_round_never_raced_is_cancelled_after_a_week():
+    # Dernière manche (8, le 21 juin) jamais courue : à J+3 elle reste à prévoir ; à J+8 elle
+    # est annulée, il ne reste plus de points et le titre est joué.
+    from f1pred.pipeline import forecast
+    results = make_results(seasons=(2024, 2025), n_rounds=8)
+    results = results[~((results["season"] == 2025) & (results["round"] == 8))]
+    sched = make_schedule(2025, 8)
+    assert [r.round for r in forecast(results, sched, 2025, 7, today=date(2025, 6, 24)).races
+            ] == [8]
+    fc = forecast(results, sched, 2025, 7, today=date(2025, 6, 29))
+    assert fc.races == []
+    cp = predict_from(results, sched, 2025, 7, n_sims=200, seed=0, today=date(2025, 6, 29))
+    assert cp.sim.decided
+
+
+def test_past_checkpoint_ignores_unraced_rounds_dated_before_it():
+    # Manche 6 annulée (jamais courue), 7 courue : au checkpoint 7 la 6 n'est plus à venir,
+    # au checkpoint 5 elle l'était encore.
+    from f1pred.pipeline import forecast
+    results = make_results(seasons=(2024, 2025), n_rounds=8)
+    results = results[~((results["season"] == 2025) & (results["round"] == 6))]
+    sched = make_schedule(2025, 8)
+    assert [r.round for r in forecast(results, sched, 2025, 7).races] == [8]
+    assert [r.round for r in forecast(results, sched, 2025, 5).races] == [6, 7, 8]

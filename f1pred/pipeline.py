@@ -10,7 +10,14 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from f1pred.chrono import known_rounds, race_order
+from f1pred.chrono import (
+    CANCEL_GRACE_DAYS,
+    cancel_cutoff,
+    cancelled_rounds,
+    known_rounds,
+    race_order,
+    round_date,
+)
 from f1pred.data import RESULT_COLUMNS, JolpicaClient, load_results, load_schedule, update_cache
 from f1pred.features import add_future_rows, build_features
 from f1pred.history import load_history, save_history, upsert
@@ -123,18 +130,22 @@ def current_lineup(results: pd.DataFrame, season: int, upto_round: int) -> pd.Da
 
 
 def forecast(results: pd.DataFrame, schedule: pd.DataFrame, season: int,
-             upto_round: int) -> Forecast:
+             upto_round: int, today: date | None = None) -> Forecast:
     """Entraîne le modèle sur les données connues après `upto_round` et prévoit la suite.
 
     Connues : les manches courues au plus tard à la date de `upto_round` (ordre
-    chronologique, pas l'ordre des numéros).
+    chronologique, pas l'ordre des numéros). Une manche non courue du calendrier n'est plus à
+    venir si elle est datée d'avant la référence : `today` moins CANCEL_GRACE_DAYS pour le
+    checkpoint publié, la date de `upto_round` pour un checkpoint passé (`today` absent).
     """
     known = known_rounds(results, season, upto_round)
     past = results[(results["season"] < season)
                    | ((results["season"] == season) & results["round"].isin(known))]
     state = season_state(past, season)
     lineup = current_lineup(past, season, upto_round)
-    future = schedule[~schedule["round"].isin(known)]  # reports inclus
+    cutoff = cancel_cutoff(today) if today else round_date(results, season, upto_round)
+    gone = cancelled_rounds(schedule, known, cutoff)
+    future = schedule[~schedule["round"].isin([*known, *gone])]  # reports datés inclus
     future = (future.assign(_t=pd.to_datetime(future["date"]))
               .sort_values(["_t", "round"], kind="stable").drop(columns="_t"))
 
@@ -175,10 +186,11 @@ def simulate_forecast(fc: Forecast, n_sims: int, seed: int,
 
 
 def predict_from(results: pd.DataFrame, schedule: pd.DataFrame, season: int, upto_round: int,
-                 n_sims: int, seed: int, shocks: Shocks | None = None) -> Checkpoint:
+                 n_sims: int, seed: int, shocks: Shocks | None = None,
+                 today: date | None = None) -> Checkpoint:
     """Probabilités de titre avec uniquement les données disponibles après `upto_round`."""
-    return simulate_forecast(forecast(results, schedule, season, upto_round), n_sims, seed,
-                             shocks)
+    return simulate_forecast(forecast(results, schedule, season, upto_round, today), n_sims,
+                             seed, shocks)
 
 
 def _schedule_from_results(results: pd.DataFrame, season: int) -> pd.DataFrame:
@@ -202,17 +214,19 @@ def _season_records(results: pd.DataFrame, season: int) -> list[pd.DataFrame]:
 
 def season_checkpoints(results: pd.DataFrame, schedule: pd.DataFrame, season: int,
                        rounds: list[int], n_sims: int, seed: int,
-                       n_sims_final: int | None = None) -> list[Checkpoint]:
+                       n_sims_final: int | None = None,
+                       today: date | None = None) -> list[Checkpoint]:
     """Un checkpoint par manche (`rounds` dans l'ordre chronologique) ; les chocs de la
     manche r n'utilisent que les courses déjà courues à la date de r.
 
     Les erreurs de prévision viennent de la saison précédente et des checkpoints déjà calculés
-    de la saison en cours. La dernière manche utilise `n_sims_final` simulations.
+    de la saison en cours. La dernière manche, celle publiée, utilise `n_sims_final`
+    simulations et `today` pour repérer les manches annulées (voir `forecast`).
     """
     records = _season_records(results, season - 1)
     checkpoints = []
     for rnd in rounds:
-        fc = forecast(results, schedule, season, rnd)
+        fc = forecast(results, schedule, season, rnd, today if rnd == rounds[-1] else None)
         shocks = None
         if records:
             pool = usable_records(pd.concat(records, ignore_index=True), season,
@@ -363,12 +377,17 @@ def run(data_dir: Path, out_dir: Path, offline: bool, seed: int = 0, n_sims: int
     schedule = load_schedule(raw, season)
     rounds = race_order(results, season)  # chronologique : `last` est la plus récente
     last = rounds[-1]
-    postponed = check_contiguous(rounds, schedule, season)
-    warning = ""
+    cancelled = cancelled_rounds(schedule, rounds, cancel_cutoff(today))
+    postponed = [r for r in check_contiguous(rounds, schedule, season) if r not in cancelled]
+    notes = []
     if postponed:
-        warning = f" Attention : manche(s) {postponed} non courue(s), gardée(s) à venir."
-        log.warning("Saison %s : manche(s) %s non courue(s), gardée(s) à venir.",
-                    season, postponed)
+        notes.append(f"manche(s) {postponed} non courue(s), gardée(s) à venir.")
+    if cancelled:
+        notes.append(f"manche(s) {cancelled} non courue(s) depuis plus de "
+                     f"{CANCEL_GRACE_DAYS} jours : annulée(s) ? Plus comptée(s) à venir.")
+    for note in notes:
+        log.warning("Saison %s : %s", season, note)
+    warning = "".join(f" Attention : {note}" for note in notes)
 
     hist_path = data_dir / "history.json"
     history = load_history(hist_path)
@@ -382,7 +401,7 @@ def run(data_dir: Path, out_dir: Path, offline: bool, seed: int = 0, n_sims: int
                        + warning)
 
     checkpoints = season_checkpoints(results, schedule, season, rounds, n_sims, seed,
-                                     n_sims_final)
+                                     n_sims_final, today)
     for cp in checkpoints:
         validate(cp)
         history = upsert(history, _history_entry(cp, season, schedule))
