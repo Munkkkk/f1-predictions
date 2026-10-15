@@ -385,6 +385,17 @@ def test_results_fingerprint_ignores_row_order_and_other_seasons(data_dir):
     assert fp != results_fingerprint(changed, 2025)
 
 
+def test_results_fingerprint_same_on_windows_and_linux(data_dir, monkeypatch):
+    """L'empreinte calculée en local (Windows) doit être celle de la CI (Linux)."""
+    from f1pred.data import load_results
+    from f1pred.pipeline import results_fingerprint
+    results = load_results(data_dir / "raw")
+    monkeypatch.setattr("os.linesep", "\n")
+    linux = results_fingerprint(results, 2025)
+    monkeypatch.setattr("os.linesep", "\r\n")
+    assert results_fingerprint(results, 2025) == linux
+
+
 def _miss_round(results, driver, rnd, reserve="reserve_x"):
     """`driver` manque la manche `rnd` de 2025 : un réserviste prend son volant ce week-end."""
     out = results.copy()

@@ -393,7 +393,9 @@ def results_fingerprint(results: pd.DataFrame, season: int) -> str:
     """sha256 des résultats de la saison, triés et sérialisés de façon déterministe."""
     cur = results.loc[results["season"] == season, RESULT_COLUMNS]
     cur = cur.sort_values(["season", "round", "is_sprint", "driver_id"])
-    return hashlib.sha256(cur.to_csv(index=False).encode("utf-8")).hexdigest()
+    # lineterminator fixe : sinon os.linesep, et l'empreinte Windows diffère de celle de la CI.
+    return hashlib.sha256(cur.to_csv(index=False, lineterminator="\n")
+                          .encode("utf-8")).hexdigest()
 
 
 def _load_state(path: Path) -> dict:
