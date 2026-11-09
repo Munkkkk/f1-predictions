@@ -577,5 +577,38 @@
       "stroll": 0.0,
       "tsunoda": 0.0
     }
+  },
+  {
+    "season": 2026,
+    "round": 20,
+    "date": "2026-11-08",
+    "race_name": "Brazilian Grand Prix",
+    "probabilities": {
+      "albon": 0.0,
+      "alonso": 0.0,
+      "antonelli": 1.0,
+      "arvid_lindblad": 0.0,
+      "bearman": 0.0,
+      "bortoleto": 0.0,
+      "bottas": 0.0,
+      "colapinto": 0.0,
+      "gasly": 0.0,
+      "hadjar": 0.0,
+      "hamilton": 0.0,
+      "hulkenberg": 0.0,
+      "lawson": 0.0,
+      "leclerc": 0.0,
+      "max_verstappen": 0.0,
+      "norris": 0.0,
+      "ocon": 0.0,
+      "perez": 0.0,
+      "piastri": 0.0,
+      "rafael_camara": 0.0,
+      "russell": 0.0,
+      "ryo_hirakawa": 0.0,
+      "sainz": 0.0,
+      "stroll": 0.0,
+      "tsunoda": 0.0
+    }
   }
 ]
